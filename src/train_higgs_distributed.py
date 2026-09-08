@@ -132,6 +132,17 @@ def train_partition(num_samples: int, global_batch_size: int, workers: int, epoc
     return result
 
 
+def _memory_total_bytes():
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError):
+        return None
+    return None
+
+
 def collect_environment(spark):
     import pandas
     import pyarrow
@@ -143,6 +154,8 @@ def collect_environment(spark):
         "python": sys.version,
         "platform": platform.platform(),
         "hostname": socket.gethostname(),
+        "cpu_count": os.cpu_count(),
+        "memory_total_bytes": _memory_total_bytes(),
         "pytorch": torch.__version__,
         "pyspark": pyspark.__version__,
         "hadoop_version": spark.sparkContext._jvm.org.apache.hadoop.util.VersionInfo.getVersion(),
@@ -155,8 +168,10 @@ def collect_environment(spark):
         "spark_app_id": spark.sparkContext.applicationId,
         "spark_executor_memory": spark.conf.get("spark.executor.memory", None),
         "spark_executor_cores": spark.conf.get("spark.executor.cores", None),
+        "spark_executor_instances": spark.conf.get("spark.executor.instances", None),
         "spark_default_parallelism": spark.sparkContext.defaultParallelism,
         "torch_cuda_available": torch.cuda.is_available(),
+        "torch_cuda_device_count": torch.cuda.device_count(),
         "torch_cuda_version": torch.version.cuda,
     }
 
@@ -248,6 +263,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--git-sha", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -342,7 +358,7 @@ def main():
             "validation_metrics": validation_metrics,
             "test_metrics": test_metrics,
             "environment": environment,
-            "git_sha": os.environ.get("GIT_COMMIT_SHA", "unknown"),
+            "git_sha": args.git_sha,
             "train_path": args.train_path,
             "validation_path": args.validation_path,
             "test_path": args.test_path,
