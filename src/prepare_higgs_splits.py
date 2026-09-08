@@ -5,6 +5,10 @@ The UCI dataset defines the final 500,000 observations as the test set. Because
 that boundary is positional, this script refuses to proceed unless the source
 is read as one Spark partition, then uses zipWithIndex to preserve source order.
 The resulting datasets are written once and reused by all benchmark conditions.
+
+Training datasets retain a deterministic source_row_id so the benchmark runner
+can construct exactly equal worker partitions for TorchDistributor rather than
+assuming Spark's generic repartition operation is perfectly balanced.
 """
 from __future__ import annotations
 
@@ -21,6 +25,10 @@ TEST_ROWS = 500_000
 TRAINING_VOLUMES = (1_000_000, 2_500_000, 5_000_000, 10_000_000)
 
 
+def with_source_row_id(rdd):
+    return rdd.zipWithIndex().map(lambda item: (*item[0], int(item[1])))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, help="Original UCI HIGGS CSV/CSV.GZ on HDFS")
@@ -32,6 +40,9 @@ def main():
         schema = T.StructType(
             [T.StructField("label", T.DoubleType(), False)]
             + [T.StructField(f"f{i}", T.DoubleType(), False) for i in range(28)]
+        )
+        indexed_schema = T.StructType(
+            schema.fields + [T.StructField("source_row_id", T.LongType(), False)]
         )
         raw = spark.read.schema(schema).option("header", "false").csv(args.input)
         partitions = raw.rdd.getNumPartitions()
@@ -46,7 +57,9 @@ def main():
             raise RuntimeError(f"Expected {TOTAL_ROWS} rows from UCI HIGGS, found {count}")
 
         indexed = raw.rdd.zipWithIndex()
-        train_rdd = indexed.filter(lambda item: item[1] < TRAIN_ROWS).map(lambda item: item[0])
+        train_rdd = indexed.filter(lambda item: item[1] < TRAIN_ROWS).map(
+            lambda item: (*item[0], int(item[1]))
+        )
         validation_rdd = indexed.filter(
             lambda item: TRAIN_ROWS <= item[1] < TRAIN_ROWS + VALIDATION_ROWS
         ).map(lambda item: item[0])
@@ -54,7 +67,7 @@ def main():
             lambda item: item[1] >= TRAIN_ROWS + VALIDATION_ROWS
         ).map(lambda item: item[0])
 
-        train_df = spark.createDataFrame(train_rdd, schema=schema).cache()
+        train_df = spark.createDataFrame(train_rdd, schema=indexed_schema).cache()
         validation_df = spark.createDataFrame(validation_rdd, schema=schema)
         test_df = spark.createDataFrame(test_rdd, schema=schema)
 
@@ -79,10 +92,12 @@ def main():
             "training_volume_rows": list(TRAINING_VOLUMES),
             "source_order_preserved": True,
             "source_partition_count": partitions,
+            "training_row_id_column": "source_row_id",
+            "training_row_id_range": [0, TRAIN_ROWS - 1],
         }
 
         for volume in TRAINING_VOLUMES:
-            subset = train_df.limit(volume)
+            subset = train_df.filter(train_df.source_row_id < volume)
             actual = subset.count()
             if actual != volume:
                 raise RuntimeError(f"training volume {volume}: expected {volume}, found {actual}")
