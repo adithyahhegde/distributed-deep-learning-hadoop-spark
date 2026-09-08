@@ -19,7 +19,7 @@ Hadoop MapReduce and Spark are not treated as competing deep-learning frameworks
 
 ## Primary dataset and provenance
 
-The primary dataset is the **UCI HIGGS** dataset. UCI reports 11,000,000 instances, a binary class label followed by 28 real-valued features, no missing values, and a final 500,000-example test partition. The official UCI test partition is never used for training or model selection. citeturn3search0
+The primary dataset is the **UCI HIGGS** dataset. UCI reports 11,000,000 instances, a binary class label followed by 28 real-valued features, no missing values, and a final 500,000-example test partition.
 
 The repository preparation script creates three HDFS-backed Parquet datasets from the original UCI file. Because the test boundary is positional, the preparation step refuses to proceed unless the original source is ingested as one Spark partition, then uses `zipWithIndex` to preserve source order. It verifies the exact counts of 10,000,000 training rows, 500,000 validation rows, and 500,000 official test rows before writing the prepared datasets.
 
