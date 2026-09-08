@@ -21,7 +21,9 @@ Hadoop MapReduce and Spark are not treated as competing deep-learning frameworks
 
 The primary dataset is the **UCI HIGGS** dataset. UCI reports 11,000,000 instances, a binary class label followed by 28 real-valued features, no missing values, and a final 500,000-example test partition.
 
-The repository preparation script creates three HDFS-backed Parquet datasets from the original UCI file. Because the test boundary is positional, the preparation step refuses to proceed unless the original source is ingested as one Spark partition, then uses `zipWithIndex` to preserve source order. It verifies the exact counts of 10,000,000 training rows, 500,000 validation rows, and 500,000 official test rows before writing the prepared datasets.
+The repository preparation script creates HDFS-backed Parquet datasets from the original UCI file. Because the test boundary is positional, the preparation step refuses to proceed unless the original source is ingested as one Spark partition, then uses `zipWithIndex` to preserve source order. It verifies the exact counts of 10,000,000 training rows, 500,000 validation rows, and 500,000 official test rows before writing the prepared datasets.
+
+Training datasets retain a deterministic `source_row_id` so that worker partitioning can be checked rather than inferred from generic Spark balancing.
 
 This is a preprocessing/provenance step, not a benchmark result.
 
@@ -82,6 +84,14 @@ For worker-scaling comparisons, keep constant:
 - prepared HDFS storage format and paths;
 - executor/worker resource configuration except for the intended worker-count factor.
 
+## TorchDistributor partitioning gate
+
+`TorchDistributor.train_on_dataframe` requires the input DataFrame to have evenly divided partitions, because each Spark task processes one partition. Divisibility of the total row count alone does not prove that generic Spark repartitioning produced equal partitions.
+
+The repository therefore uses the retained `source_row_id` to assign each training row to `source_row_id mod workers`, repartitions by that deterministic worker bucket, counts the resulting Spark partitions, and refuses to start training unless every partition contains exactly `train_rows / workers` observations. This verification is retained as run metadata.
+
+This gate is necessary for interpreting worker-count comparisons as controlled changes in parallelism rather than accidental differences in per-worker sample count.
+
 ## Primary baseline definition
 
 The primary speedup baseline is **one worker using the same `TorchDistributor.train_on_dataframe` execution path** and the same HDFS data, model, optimizer, batch size, epoch budget, timing boundary, and software environment.
@@ -99,7 +109,7 @@ Every retained run captures:
 - validation and test metrics;
 - worker/process count;
 - dataset row count;
-- partition count;
+- partition count and verified partition sizes;
 - software versions;
 - hardware/cluster configuration;
 - Spark application ID;
@@ -163,6 +173,8 @@ Before the full experiment:
 ## Current status
 
 **Research design:** locked for pilot execution.
+
+**Partition-balance correctness gate:** implemented and statically validated; target execution still required.
 
 **Environment validation:** pending actual target Spark/HDFS/PyTorch execution.
 
