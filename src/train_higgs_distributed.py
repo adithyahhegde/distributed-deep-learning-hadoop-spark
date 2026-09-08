@@ -4,6 +4,11 @@
 Primary path: HDFS Parquet -> Spark DataFrame -> TorchDistributor.train_on_dataframe -> PyTorch DDP.
 The benchmark consumes provenance-preserving pre-split HDFS paths so the UCI final 500,000 test
 observations remain untouched. This script records measurements and never fabricates results.
+
+Important: TorchDistributor.train_on_dataframe requires evenly divided input partitions. The
+preparation script therefore retains source_row_id; this runner uses source_row_id modulo the
+worker count to construct exactly equal worker buckets and verifies the partition sizes before
+starting distributed training.
 """
 from __future__ import annotations
 
@@ -173,14 +178,36 @@ def evaluate_streaming(spark_df, state_dict, batch_size: int):
     }
 
 
-def read_higgs(spark, path: str):
+def read_higgs(spark, path: str, include_source_row_id: bool = False):
     from pyspark.sql import types as T
 
-    schema = T.StructType(
-        [T.StructField("label", T.DoubleType(), False)]
-        + [T.StructField(f"f{i}", T.DoubleType(), False) for i in range(28)]
+    schema_fields = [T.StructField("label", T.DoubleType(), False)]
+    schema_fields += [T.StructField(f"f{i}", T.DoubleType(), False) for i in range(28)]
+    if include_source_row_id:
+        schema_fields.append(T.StructField("source_row_id", T.LongType(), False))
+    df = spark.read.schema(T.StructType(schema_fields)).parquet(path)
+    return df
+
+
+def exact_worker_partition(df, workers: int, train_rows: int):
+    from pyspark.sql import functions as F
+
+    if train_rows % workers != 0:
+        raise ValueError("train_rows must be divisible by workers for exact per-worker samples")
+    expected = train_rows // workers
+    bucketed = (
+        df.withColumn("_worker_bucket", F.pmod(F.col("source_row_id"), F.lit(workers)))
+        .repartition(workers, "_worker_bucket")
+        .drop("_worker_bucket")
     )
-    return spark.read.schema(schema).parquet(path).select(*COLUMNS)
+
+    partition_sizes = bucketed.rdd.mapPartitions(lambda rows: [sum(1 for _ in rows)]).collect()
+    if len(partition_sizes) != workers or any(size != expected for size in partition_sizes):
+        raise RuntimeError(
+            "TorchDistributor requires evenly divided partitions; observed "
+            f"{partition_sizes}, expected {[expected] * workers}"
+        )
+    return bucketed.select("source_row_id", *COLUMNS), partition_sizes
 
 
 def main():
@@ -202,7 +229,7 @@ def main():
     if args.train_rows % args.workers != 0:
         raise ValueError("train_rows must be divisible by workers for exact partition sampling")
 
-    from pyspark.sql import SparkSession, functions as F
+    from pyspark.sql import SparkSession
     from pyspark.ml.torch.distributor import TorchDistributor
 
     spark = (
@@ -212,7 +239,7 @@ def main():
     )
     try:
         start_job = time.perf_counter()
-        train = read_higgs(spark, args.train_path)
+        train = read_higgs(spark, args.train_path, include_source_row_id=True)
         validation = read_higgs(spark, args.validation_path)
         test = read_higgs(spark, args.test_path)
 
@@ -229,14 +256,7 @@ def main():
                 f"train={actual_train}, validation={actual_validation}, test={actual_test}"
             )
 
-        # Randomized partition assignment is fixed by seed; split membership is immutable upstream.
-        train = (
-            train.withColumn("_partition_key", F.rand(args.seed))
-            .repartition(args.workers, "_partition_key")
-            .drop("_partition_key")
-            .select(*COLUMNS)
-        )
-
+        train, partition_sizes = exact_worker_partition(train, args.workers, args.train_rows)
         partition_rows = args.train_rows // args.workers
         distributor = TorchDistributor(
             num_processes=args.workers,
@@ -246,8 +266,8 @@ def main():
 
         before_train = time.perf_counter()
         result = distributor.train_on_dataframe(
+            train.select(*COLUMNS),
             train_partition,
-            train,
             partition_rows,
             args.batch_size,
             args.epochs,
@@ -267,6 +287,8 @@ def main():
             "train_rows": args.train_rows,
             "validation_rows": args.validation_rows,
             "test_rows": args.test_rows,
+            "partition_count": len(partition_sizes),
+            "partition_sizes": partition_sizes,
             "partition_rows": partition_rows,
             "batch_size": args.batch_size,
             "epochs": args.epochs,
