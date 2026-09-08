@@ -17,6 +17,7 @@ changing the optimization regime.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -226,6 +227,14 @@ def exact_worker_partition(df, workers: int, train_rows: int):
     return bucketed.select(*COLUMNS), partition_sizes
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-path", required=True)
@@ -249,6 +258,7 @@ def main():
 
     from pyspark.sql import SparkSession
     from pyspark.ml.torch.distributor import TorchDistributor
+    import torch
 
     spark = (
         SparkSession.builder
@@ -300,8 +310,16 @@ def main():
 
         validation_metrics = evaluate_streaming(validation, result["state_dict"], args.global_batch_size)
         test_metrics = evaluate_streaming(test, result["state_dict"], args.global_batch_size)
+
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        model_path = output_path.with_suffix(".model.pt")
+        torch.save(result["state_dict"], model_path)
+        model_sha256 = sha256_file(model_path)
+
         environment = collect_environment(spark)
         output = {
+            "artifact_schema_version": 2,
             "status": "completed",
             "measurement_type": "actual_run",
             "workers": args.workers,
@@ -328,9 +346,10 @@ def main():
             "train_path": args.train_path,
             "validation_path": args.validation_path,
             "test_path": args.test_path,
+            "model_artifact_path": str(model_path),
+            "model_artifact_sha256": model_sha256,
         }
-        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(output, indent=2, default=str), encoding="utf-8")
+        output_path.write_text(json.dumps(output, indent=2, default=str), encoding="utf-8")
         print(json.dumps(output, indent=2, default=str))
     finally:
         spark.stop()
