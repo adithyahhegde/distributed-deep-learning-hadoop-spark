@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Run the controlled HIGGS distributed-training experiment.
 
-Primary path: HDFS Parquet -> Spark DataFrame -> TorchDistributor.train_on_dataframe -> PyTorch DDP.
+Primary path: HDFS Parquet -> Spark DataFrame -> TorchDistributor._train_on_dataframe -> PyTorch DDP.
 The benchmark consumes provenance-preserving pre-split HDFS paths so the UCI final 500,000 test
 observations remain untouched. This script records measurements and never fabricates results.
 
-TorchDistributor.train_on_dataframe requires evenly divided input partitions. The preparation
-script therefore retains source_row_id; this runner uses source_row_id modulo the worker count
-to construct exactly equal worker buckets and verifies the partition sizes before training.
+TorchDistributor's DataFrame-integrated path is version-sensitive; the repository pins PySpark 3.5.9
+and calls the corresponding Spark 3.5 method explicitly. The input Spark DataFrame must have evenly
+divided partitions, so the runner retains source_row_id, uses source_row_id modulo the worker count
+to construct exactly equal worker buckets, and verifies partition sizes before training.
 
 The benchmark keeps the *global* batch size constant across worker counts. Each worker therefore
 uses local_batch_size = global_batch_size / workers, preventing worker-count changes from silently
@@ -284,7 +285,7 @@ def main():
         )
 
         before_train = time.perf_counter()
-        result = distributor.train_on_dataframe(
+        result = distributor._train_on_dataframe(
             train_partition,
             train_partition_df,
             partition_rows,
