@@ -33,6 +33,7 @@ Training datasets retain a deterministic source row identifier so worker partiti
 ## Locked benchmark configuration
 
 - Workers: 1, 2, 4, 8, subject to environment feasibility.
+- Scaling design: **strong scaling** — fixed training volume within each worker-count comparison, with executor/task capacity increased according to the locked resource plan.
 - Model: 28 -> 128 -> 64 -> 1 feed-forward classifier.
 - Activation: ReLU.
 - Loss: BCEWithLogitsLoss.
@@ -42,20 +43,21 @@ Training datasets retain a deterministic source row identifier so worker partiti
 - Epochs: 5.
 - Seed: 42.
 - Primary baseline: 1-worker TorchDistributor using the same HDFS/Parquet path and timing boundary.
+- Primary predictive outputs: final-epoch training loss, validation loss/ROC-AUC/accuracy, and test loss/ROC-AUC/accuracy.
 
 ## Repository controls
 
-- `docs/research_protocol.md` — locked research logic, leakage controls, partition-balance gate, metrics, baseline rules, and interpretation guardrails.
+- `docs/research_protocol.md` — locked research logic, leakage controls, partition-balance gate, strong-scaling resource controls, metrics, baseline rules, and interpretation guardrails.
 - `docs/literature_matrix.md` — literature synthesis and research-gap tracking.
 - `docs/references_verified.md` — checked scholarly, dataset, and official technology source register.
 - `docs/paper_format_spec.md` — verified visual/layout benchmark from the prior Operations/Capacity Planning paper.
-- `configs/experiment_matrix.yaml` — locked worker/data-volume matrix and integrity controls.
+- `configs/experiment_matrix.yaml` — locked worker/data-volume matrix, strong-scaling design, and integrity controls.
 - `src/environment_check.py` — captures actual Python/library/cluster runtime metadata.
 - `src/prepare_higgs_splits.py` — creates provenance-preserving HDFS splits and exact training-volume datasets.
 - `src/pilot_torch_distributor.py` — minimal synthetic TorchDistributor orchestration pilot; not a benchmark.
-- `src/train_higgs_distributed.py` — real HIGGS Spark/TorchDistributor training and evaluation runner with exact partition verification and fixed global batch-size control.
-- `src/analyze_runs.py` — conservative aggregation of retained actual-run artifacts; missing baselines are never imputed.
-- `docs/pilot_runbook.md` — environment gate and benchmark execution procedure.
+- `src/train_higgs_distributed.py` — real HIGGS Spark/TorchDistributor training and evaluation runner with exact partition verification, fixed global batch-size control, and complete training/validation/test metric capture.
+- `src/analyze_runs.py` — conservative aggregation of retained actual-run artifacts with variability summaries; missing baselines are never imputed.
+- `docs/pilot_runbook.md` — environment gate, strong-scaling resource plan, and benchmark execution procedure.
 
 ## Experimental integrity
 
@@ -71,6 +73,8 @@ No result, graph, timing, speedup, predictive metric, or resource measurement is
 - Experiment protocol: **locked for pilot**
 - TorchDistributor partition-balance gate: **implemented and statically validated**
 - Global batch-size control: **implemented to keep optimization regime comparable across worker counts**
+- Predictive metric definitions: **locked and implemented**
+- Strong-scaling resource design: **locked; target resource configuration still requires validation**
 - Spark target version: **pinned to 3.5.9**
 - Formatting benchmark: **verified from rendered prior paper**
 - Target distributed environment: **not yet validated**
