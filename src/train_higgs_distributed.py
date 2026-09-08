@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Run the controlled HIGGS distributed-training experiment.
 
-Primary path: HDFS -> Spark DataFrame -> TorchDistributor.train_on_dataframe -> PyTorch DDP.
-The benchmark consumes pre-split HDFS paths so the UCI final 500,000 test observations
-can be preserved exactly. This script records measurements and never fabricates results.
+Primary path: HDFS Parquet -> Spark DataFrame -> TorchDistributor.train_on_dataframe -> PyTorch DDP.
+The benchmark consumes provenance-preserving pre-split HDFS paths so the UCI final 500,000 test
+observations remain untouched. This script records measurements and never fabricates results.
 """
 from __future__ import annotations
 
@@ -180,7 +180,7 @@ def read_higgs(spark, path: str):
         [T.StructField("label", T.DoubleType(), False)]
         + [T.StructField(f"f{i}", T.DoubleType(), False) for i in range(28)]
     )
-    return spark.read.schema(schema).option("header", "false").csv(path).select(*COLUMNS)
+    return spark.read.schema(schema).parquet(path).select(*COLUMNS)
 
 
 def main():
@@ -229,8 +229,7 @@ def main():
                 f"train={actual_train}, validation={actual_validation}, test={actual_test}"
             )
 
-        # The benchmark deliberately randomizes partition assignment with a fixed seed.
-        # The split membership itself is created upstream and is never changed here.
+        # Randomized partition assignment is fixed by seed; split membership is immutable upstream.
         train = (
             train.withColumn("_partition_key", F.rand(args.seed))
             .repartition(args.workers, "_partition_key")
