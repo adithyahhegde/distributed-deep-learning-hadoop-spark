@@ -65,6 +65,12 @@ These settings are fixed across worker counts and training-volume conditions. No
 
 Candidate distributed worker/process levels are **1, 2, 4, and 8**, subject to the actual environment being able to execute each level reliably. Unsupported or unstable levels are reported as unavailable rather than simulated.
 
+The primary worker-scaling design is **strong scaling**: for a fixed training-data volume, worker count is increased while the dataset, model, global batch size, epoch budget, software environment, and HDFS representation remain fixed. The intended interpretation is how training time changes as distributed task parallelism/resources increase. It is not a claim about universal cluster scalability.
+
+Each accepted run must have enough schedulable Spark CPU capacity to execute the requested TorchDistributor processes concurrently without intentional oversubscription. The actual Spark master, default parallelism, executor cores/instances, executor memory, dynamic-allocation state, and related resource configuration are retained as run metadata. A worker-count condition that cannot meet this resource gate is reported as unavailable rather than treated as a valid scaling observation.
+
+Spark's configuration documentation identifies `spark.executor.cores` as the number of cores used by an executor and documents resource/scheduling controls; Spark's tuning guidance also emphasizes that cluster parallelism must be sufficient to utilize the available CPU resources. citeturn3search3turn3search2
+
 ### Training-data volume
 
 Candidate training-volume levels are **1,000,000; 2,500,000; 5,000,000; and 10,000,000 rows**. All four values are divisible by 8, allowing exact equal per-worker sample counts at every candidate worker level.
@@ -85,7 +91,9 @@ For worker-scaling comparisons, keep constant:
 - evaluation code;
 - software environment;
 - prepared HDFS storage format and paths;
-- executor/worker resource configuration except for the intended worker-count factor.
+- intended executor/resource configuration except for the worker-count scaling factor.
+
+The exact resource allocation is not assumed; it is measured and recorded. This prevents a paper claim about scaling from silently mixing worker-count effects with undocumented CPU oversubscription.
 
 ## TorchDistributor partitioning gate
 
@@ -99,7 +107,7 @@ This gate is necessary for interpreting worker-count comparisons as controlled c
 
 The primary speedup baseline is **one worker using the same Spark 3.5.9 TorchDistributor DataFrame-integrated execution path** and the same HDFS data, model, optimizer, global batch size, epoch budget, timing boundary, and software environment.
 
-This baseline is intentionally different from a native single-process PyTorch baseline. A native PyTorch run can be reported as a secondary comparison, but it must not be silently substituted for the one-worker Spark/TorchDistributor denominator because that would confound distributed scaling with framework/storage differences.
+This baseline is intentionally different from a native single-process PyTorch baseline. A native PyTorch run can be reported as a secondary comparison, but it must not be silently substituted for the one-worker TorchDistributor denominator because that would confound distributed scaling with framework/storage differences.
 
 ## Timing and measurements
 
@@ -163,12 +171,13 @@ Before the full experiment:
 2. validate Spark reading of the prepared Parquet splits;
 3. validate Spark-to-PyTorch distributed execution;
 4. verify the Spark 3.5.9 TorchDistributor DataFrame-integrated path and partition data loader in the target environment;
-5. run a small end-to-end pilot;
-6. confirm worker/process counts;
-7. verify process-group initialization and clean shutdown;
-8. verify metric consistency, including training, validation, and test loss definitions;
-9. verify retained metadata and run artifacts, including the serialized model artifact;
-10. freeze the environment and benchmark configuration.
+5. verify sufficient Spark task/resource capacity for the requested worker count without intentional oversubscription;
+6. run a small end-to-end pilot;
+7. confirm worker/process counts;
+8. verify process-group initialization and clean shutdown;
+9. verify metric consistency, including training, validation, and test loss definitions;
+10. verify retained metadata and run artifacts, including the serialized model artifact;
+11. freeze the environment and benchmark configuration.
 
 ## Interpretation guardrails
 
@@ -178,6 +187,7 @@ Before the full experiment:
 - HDFS/storage effects and distributed-compute effects must not be conflated.
 - Results from one cluster configuration must not be generalized to arbitrary Spark/Hadoop clusters.
 - The study measures the tested configuration and workload, not universal Spark/Hadoop performance.
+- The strong-scaling experiment must not be described as weak scaling merely because separate training-volume conditions are also tested.
 
 ## Current status
 
@@ -192,6 +202,8 @@ Before the full experiment:
 **Model artifact retention:** implemented with SHA-256 integrity metadata; target execution still required.
 
 **Complete predictive-metric capture:** implemented for training, validation, and test loss/quality metrics; target execution still required.
+
+**Strong-scaling resource gate:** defined in the locked protocol; target resource configuration must be validated before benchmark acceptance.
 
 **Environment validation:** pending actual target Spark/HDFS/PyTorch execution.
 
