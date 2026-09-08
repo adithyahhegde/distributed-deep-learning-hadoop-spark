@@ -31,18 +31,19 @@ model:
   loss: "BCEWithLogitsLoss"
   optimizer: "Adam"
   learning_rate: 0.001
-  batch_size: 1024
+  global_batch_size: 1024
   epochs: 5
   seed: 42
   preprocessing: "none unless a pre-benchmark pilot establishes a fixed, leakage-free transform; no per-worker tuning"
+  batch_control: "Keep global batch size fixed; local_batch_size = global_batch_size / workers."
 
 execution:
-  orchestration: "Apache Spark"
+  orchestration: "Apache Spark 3.5.9"
   training: "PyTorch DistributedDataParallel"
-  distributor: "TorchDistributor.train_on_dataframe"
+  distributor: "TorchDistributor._train_on_dataframe"
   storage: "HDFS"
   prepared_format: "Parquet"
-  baseline: "1-worker TorchDistributor run using the identical HDFS split, model, optimizer, batch size, epoch budget, timing boundary, and software environment"
+  baseline: "1-worker TorchDistributor run using the identical HDFS split, model, optimizer, global batch size, epoch budget, timing boundary, and software environment"
   secondary_baseline: "Native single-process PyTorch may be evaluated only as a separately labelled comparison; it is not the primary speedup denominator"
 
 metrics:
@@ -59,7 +60,7 @@ metrics:
     - log_loss
   secondary:
     - job_wall_clock_seconds
-    - worker_training_seconds
+    - synchronized_max_worker_training_seconds
     - resource_utilization_when_reliable
 
 repetitions:
