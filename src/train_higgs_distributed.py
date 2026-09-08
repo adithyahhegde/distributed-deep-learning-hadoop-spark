@@ -2,8 +2,8 @@
 """Run the controlled HIGGS distributed-training experiment.
 
 Primary path: HDFS -> Spark DataFrame -> TorchDistributor.train_on_dataframe -> PyTorch DDP.
-This script records measurements and environment metadata, but never fabricates results.
-It is intended for execution on the validated Spark/HDFS target environment.
+The benchmark consumes pre-split HDFS paths so the UCI final 500,000 test observations
+can be preserved exactly. This script records measurements and never fabricates results.
 """
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ import math
 import os
 import platform
 import socket
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -44,8 +43,7 @@ def train_partition(num_samples: int, batch_size: int, epochs: int, learning_rat
     rank = int(os.environ["RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
     torch.manual_seed(seed + rank)
-    np_seed = seed + rank
-    np.random.seed(np_seed)
+    np.random.seed(seed + rank)
 
     if not dist.is_initialized():
         backend = "nccl" if torch.cuda.is_available() else "gloo"
@@ -66,7 +64,8 @@ def train_partition(num_samples: int, batch_size: int, epochs: int, learning_rat
         num_workers=0,
     )
 
-    torch.cuda.synchronize() if device.type == "cuda" else None
+    if device.type == "cuda":
+        torch.cuda.synchronize()
     start = time.perf_counter()
     last_loss = None
     batches_per_epoch = math.ceil(num_samples / batch_size)
@@ -86,7 +85,8 @@ def train_partition(num_samples: int, batch_size: int, epochs: int, learning_rat
             if epoch_batches >= batches_per_epoch:
                 break
 
-    torch.cuda.synchronize() if device.type == "cuda" else None
+    if device.type == "cuda":
+        torch.cuda.synchronize()
     elapsed = time.perf_counter() - start
 
     state = {k: v.detach().cpu() for k, v in model.module.state_dict().items()}
@@ -110,11 +110,11 @@ def train_partition(num_samples: int, batch_size: int, epochs: int, learning_rat
 
 
 def collect_environment(spark):
-    import pyspark
-    import torch
     import pandas
     import pyarrow
+    import pyspark
     import sklearn
+    import torch
 
     return {
         "python": sys.version,
@@ -173,13 +173,25 @@ def evaluate_streaming(spark_df, state_dict, batch_size: int):
     }
 
 
+def read_higgs(spark, path: str):
+    from pyspark.sql import types as T
+
+    schema = T.StructType(
+        [T.StructField("label", T.DoubleType(), False)]
+        + [T.StructField(f"f{i}", T.DoubleType(), False) for i in range(28)]
+    )
+    return spark.read.schema(schema).option("header", "false").csv(path).select(*COLUMNS)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--hdfs-path", required=True, help="HDFS path to HIGGS CSV/CSV.GZ")
+    parser.add_argument("--train-path", required=True)
+    parser.add_argument("--validation-path", required=True)
+    parser.add_argument("--test-path", required=True)
     parser.add_argument("--workers", type=int, required=True)
     parser.add_argument("--train-rows", type=int, required=True)
-    parser.add_argument("--validation-rows", type=int, default=500_000)
-    parser.add_argument("--test-rows", type=int, default=500_000)
+    parser.add_argument("--validation-rows", type=int, required=True)
+    parser.add_argument("--test-rows", type=int, required=True)
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
@@ -188,9 +200,9 @@ def main():
     args = parser.parse_args()
 
     if args.train_rows % args.workers != 0:
-        raise ValueError("train_rows must be divisible by workers for exact TorchDistributor partition sampling")
+        raise ValueError("train_rows must be divisible by workers for exact partition sampling")
 
-    from pyspark.sql import SparkSession, functions as F, types as T
+    from pyspark.sql import SparkSession, functions as F
     from pyspark.ml.torch.distributor import TorchDistributor
 
     spark = (
@@ -200,31 +212,31 @@ def main():
     )
     try:
         start_job = time.perf_counter()
-        schema = T.StructType([T.StructField("label", T.DoubleType(), False)] + [
-            T.StructField(f"f{i}", T.DoubleType(), False) for i in range(28)
-        ])
-        raw = spark.read.schema(schema).option("header", "false").csv(args.hdfs_path).select(*COLUMNS)
+        train = read_higgs(spark, args.train_path)
+        validation = read_higgs(spark, args.validation_path)
+        test = read_higgs(spark, args.test_path)
 
-        total_rows = raw.count()
-        expected_total = args.train_rows + args.validation_rows + args.test_rows
-        if total_rows != expected_total:
-            raise ValueError(f"Expected {expected_total} rows from declared split, found {total_rows}")
+        actual_train = train.count()
+        actual_validation = validation.count()
+        actual_test = test.count()
+        if (actual_train, actual_validation, actual_test) != (
+            args.train_rows,
+            args.validation_rows,
+            args.test_rows,
+        ):
+            raise ValueError(
+                "Declared split counts do not match HDFS data: "
+                f"train={actual_train}, validation={actual_validation}, test={actual_test}"
+            )
 
-        # UCI defines the final 500,000 observations as the test set. We preserve that partition.
-        test = raw.orderBy(F.monotonically_increasing_id()).limit(args.test_rows)
-        development = raw.subtract(test)
-        validation = development.orderBy(F.monotonically_increasing_id()).limit(args.validation_rows)
-        train = development.subtract(validation).limit(args.train_rows)
-
-        # Randomized round-robin partitioning prevents one Spark partition from receiving a contiguous block.
+        # The benchmark deliberately randomizes partition assignment with a fixed seed.
+        # The split membership itself is created upstream and is never changed here.
         train = (
             train.withColumn("_partition_key", F.rand(args.seed))
             .repartition(args.workers, "_partition_key")
             .drop("_partition_key")
             .select(*COLUMNS)
         )
-        validation = validation.select(*COLUMNS)
-        test = test.select(*COLUMNS)
 
         partition_rows = args.train_rows // args.workers
         distributor = TorchDistributor(
@@ -245,7 +257,8 @@ def main():
         )
         end_train = time.perf_counter()
 
-        metrics = evaluate_streaming(test, result["state_dict"], args.batch_size)
+        validation_metrics = evaluate_streaming(validation, result["state_dict"], args.batch_size)
+        test_metrics = evaluate_streaming(test, result["state_dict"], args.batch_size)
         environment = collect_environment(spark)
         output = {
             "status": "completed",
@@ -263,10 +276,13 @@ def main():
             "distributed_training_wall_clock_seconds": end_train - before_train,
             "worker_training_seconds": result["training_seconds"],
             "throughput_examples_per_second": args.train_rows / result["training_seconds"],
-            "test_metrics": metrics,
+            "validation_metrics": validation_metrics,
+            "test_metrics": test_metrics,
             "environment": environment,
             "git_sha": os.environ.get("GIT_COMMIT_SHA", "unknown"),
-            "hdfs_path": args.hdfs_path,
+            "train_path": args.train_path,
+            "validation_path": args.validation_path,
+            "test_path": args.test_path,
         }
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
         Path(args.output).write_text(json.dumps(output, indent=2, default=str), encoding="utf-8")
