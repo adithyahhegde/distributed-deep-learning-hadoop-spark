@@ -1,0 +1,38 @@
+name: Static validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  python-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile research scripts
+        run: |
+          python -m py_compile \
+            src/environment_check.py \
+            src/pilot_torch_distributor.py \
+            src/prepare_higgs_splits.py \
+            src/train_higgs_distributed.py
+      - name: Validate experiment configuration
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          with Path("configs/experiment_matrix.yaml").open() as f:
+              cfg = yaml.safe_load(f)
+          assert cfg["integrity"]["fabricate_results"] is False
+          assert cfg["integrity"]["preserve_official_test_set"] is True
+          assert cfg["workers"]["candidate"] == [1, 2, 4, 8]
+          assert cfg["model"]["learning_rate"] == 0.001
+          assert cfg["model"]["batch_size"] == 1024
+          assert cfg["model"]["epochs"] == 5
+          print("experiment_matrix.yaml: PASS")
+          PY
