@@ -1,0 +1,67 @@
+study:
+  title: "Performance and Scalability Evaluation of Distributed Deep Learning Using Hadoop and Apache Spark"
+  dataset: "UCI HIGGS"
+  question: "How does increasing distributed worker count affect training time, speedup, scaling efficiency, and predictive performance when Spark orchestrates distributed PyTorch training over HDFS?"
+
+# These are protocol candidates, not fabricated results.
+# Final feasibility-dependent values must be confirmed after the pilot.
+workers:
+  candidate: [1, 2, 4, 8]
+  rule: "Run only levels supported reliably by the target environment."
+
+training_rows:
+  candidate: [1000000, 2500000, 5000000, 10500000]
+  rule: "All subsets must come only from the development training partition."
+
+test_rows: 500000
+
+data_split:
+  source_rows: 11000000
+  official_test_rows: 500000
+  development_rows: 10500000
+  validation_fraction: "TBD before benchmark"
+  seed: 42
+
+model:
+  type: "feed_forward_binary_classifier"
+  input_features: 28
+  hidden_layers: [128, 64]
+  activation: "ReLU"
+  output: 1
+  loss: "BCEWithLogitsLoss"
+  optimizer: "Adam"
+  learning_rate: "TBD before benchmark"
+  batch_size: "TBD before benchmark"
+  epochs: "TBD before benchmark"
+  seed: 42
+
+execution:
+  orchestration: "Apache Spark"
+  training: "PyTorch"
+  distributor: "TorchDistributor"
+  storage: "HDFS"
+  baseline: "TBD; must explicitly distinguish single-machine PyTorch from single-worker distributed execution"
+
+metrics:
+  - wall_clock_training_seconds
+  - startup_and_data_loading_seconds
+  - examples_per_second
+  - speedup
+  - scaling_efficiency
+  - training_loss
+  - validation_loss
+  - roc_auc
+  - accuracy
+  - resource_utilization_when_reliable
+
+repetitions:
+  target: 3
+  minimum_rule: "Use at least three retained runs where feasible; otherwise document the limitation."
+
+integrity:
+  fabricate_results: false
+  fabricate_citations: false
+  fabricate_dataset_values: false
+  require_retained_run_artifact: true
+  require_environment_metadata: true
+  preserve_official_test_set: true
