@@ -85,9 +85,12 @@ def train_partition(num_samples: int, global_batch_size: int, workers: int, epoc
     if device.type == "cuda":
         torch.cuda.synchronize()
     start = time.perf_counter()
-    last_loss = None
     batches_per_epoch = math.ceil(num_samples / local_batch_size)
-    for _ in range(epochs):
+    final_epoch_loss_sum = 0.0
+    final_epoch_count = 0
+    for epoch in range(epochs):
+        epoch_loss_sum = 0.0
+        epoch_count = 0
         epoch_batches = 0
         for batch in loader:
             values = batch.to(device=device, dtype=torch.float32)
@@ -98,10 +101,15 @@ def train_partition(num_samples: int, global_batch_size: int, workers: int, epoc
             loss = loss_fn(logits, y)
             loss.backward()
             optimizer.step()
-            last_loss = float(loss.detach().cpu())
+            batch_count = int(values.shape[0])
+            epoch_loss_sum += float(loss.detach().cpu()) * batch_count
+            epoch_count += batch_count
             epoch_batches += 1
             if epoch_batches >= batches_per_epoch:
                 break
+        if epoch == epochs - 1:
+            final_epoch_loss_sum = epoch_loss_sum
+            final_epoch_count = epoch_count
 
     if device.type == "cuda":
         torch.cuda.synchronize()
@@ -109,6 +117,12 @@ def train_partition(num_samples: int, global_batch_size: int, workers: int, epoc
     elapsed_tensor = torch.tensor([elapsed], dtype=torch.float64, device=device)
     dist.all_reduce(elapsed_tensor, op=dist.ReduceOp.MAX)
     synchronized_elapsed = float(elapsed_tensor.item())
+
+    loss_tensor = torch.tensor(
+        [final_epoch_loss_sum, float(final_epoch_count)], dtype=torch.float64, device=device
+    )
+    dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
+    final_epoch_training_loss = float(loss_tensor[0].item() / loss_tensor[1].item())
 
     state = {k: v.detach().cpu() for k, v in model.module.state_dict().items()}
     result = {
@@ -123,7 +137,7 @@ def train_partition(num_samples: int, global_batch_size: int, workers: int, epoc
         "training_seconds_rank": elapsed,
         "training_seconds_synchronized_max": synchronized_elapsed,
         "batches_per_epoch": batches_per_epoch,
-        "last_batch_loss": last_loss,
+        "training_loss": final_epoch_training_loss,
         "state_dict": state if rank == 0 else None,
     }
 
@@ -205,9 +219,9 @@ def evaluate_streaming(spark_df, state_dict, batch_size: int):
     probs = np.asarray(ps, dtype=np.float64)
     return {
         "rows_evaluated": int(len(labels)),
+        "loss": float(log_loss(labels, probs, labels=[0, 1])),
         "accuracy": float(accuracy_score(labels, probs >= 0.5)),
         "roc_auc": float(roc_auc_score(labels, probs)),
-        "log_loss": float(log_loss(labels, probs, labels=[0, 1])),
     }
 
 
@@ -335,7 +349,7 @@ def main():
 
         environment = collect_environment(spark)
         output = {
-            "artifact_schema_version": 2,
+            "artifact_schema_version": 3,
             "status": "completed",
             "measurement_type": "actual_run",
             "workers": args.workers,
@@ -355,8 +369,13 @@ def main():
             "worker_training_seconds": result["training_seconds_synchronized_max"],
             "throughput_examples_per_second": args.train_rows / distributed_training_seconds,
             "worker_compute_throughput_examples_per_second": args.train_rows / result["training_seconds_synchronized_max"],
-            "validation_metrics": validation_metrics,
-            "test_metrics": test_metrics,
+            "training_loss": result["training_loss"],
+            "validation_loss": validation_metrics["loss"],
+            "validation_accuracy": validation_metrics["accuracy"],
+            "validation_roc_auc": validation_metrics["roc_auc"],
+            "test_loss": test_metrics["loss"],
+            "test_accuracy": test_metrics["accuracy"],
+            "test_roc_auc": test_metrics["roc_auc"],
             "environment": environment,
             "git_sha": args.git_sha,
             "train_path": args.train_path,
