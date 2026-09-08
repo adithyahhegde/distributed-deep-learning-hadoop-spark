@@ -86,12 +86,15 @@ spark-submit \
   --train-rows 1000000 \
   --validation-rows 500000 \
   --test-rows 500000 \
-  --batch-size 1024 \
+  --global-batch-size 1024 \
   --epochs 5 \
   --learning-rate 0.001 \
   --seed 42 \
+  --git-sha <exact-repository-commit-sha> \
   --output results/worker1_rows1m_run1.json
 ```
+
+The runner also writes `results/worker1_rows1m_run1.model.pt` containing the exact rank-0 model state and records its SHA-256 hash in the JSON artifact. Both files must be retained together.
 
 Only after this completes cleanly should the larger worker/data-volume matrix be attempted.
 
@@ -117,18 +120,21 @@ Each JSON artifact must contain:
 - throughput;
 - validation/test metrics;
 - software versions;
+- hardware/cluster metadata;
 - Spark application ID;
 - HDFS paths;
 - model/training configuration;
-- git SHA.
+- exact git SHA;
+- model artifact path and SHA-256 hash.
 
-Do not manually edit empirical values after the run. Derived tables and figures should be generated from these retained artifacts.
+Each completed run must also retain the referenced `.model.pt` file. Do not manually edit empirical values after the run. Derived tables and figures should be generated from these retained artifacts.
 
 ## 9. Freeze before paper Results
 
 Before writing Results, verify:
 
 - all reported values map to an artifact;
+- the artifact's model file exists and its SHA-256 hash matches;
 - speedup uses the declared one-worker baseline;
 - scaling efficiency uses the reported worker count;
 - repeated runs are summarized with variability where available;
