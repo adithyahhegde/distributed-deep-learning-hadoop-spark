@@ -109,7 +109,9 @@ Every retained run captures:
 - synchronized maximum worker-side training time;
 - total job wall-clock time;
 - examples/second;
-- validation and test metrics;
+- final-epoch training loss averaged over all training examples processed in the final epoch;
+- validation loss, ROC-AUC, and accuracy;
+- test loss, ROC-AUC, and accuracy;
 - worker/process count;
 - dataset row count;
 - partition count and verified partition sizes;
@@ -141,6 +143,8 @@ Reported predictive metrics are:
 - ROC-AUC;
 - accuracy.
 
+The retained training loss is the mean `BCEWithLogitsLoss` over all examples processed in the final training epoch, aggregated across workers. Validation and test loss are log loss computed from the retained rank-0 model predictions.
+
 Predictive performance is a secondary systems-control metric: the study is not claiming that worker scaling improves model quality. If worker count changes predictive performance materially, the result must be investigated before a scaling conclusion is made.
 
 ## Repetition and uncertainty
@@ -162,7 +166,7 @@ Before the full experiment:
 5. run a small end-to-end pilot;
 6. confirm worker/process counts;
 7. verify process-group initialization and clean shutdown;
-8. verify metric consistency;
+8. verify metric consistency, including training, validation, and test loss definitions;
 9. verify retained metadata and run artifacts, including the serialized model artifact;
 10. freeze the environment and benchmark configuration.
 
@@ -186,6 +190,8 @@ Before the full experiment:
 **Spark target version:** pinned to 3.5.9; exact target cluster execution still required.
 
 **Model artifact retention:** implemented with SHA-256 integrity metadata; target execution still required.
+
+**Complete predictive-metric capture:** implemented for training, validation, and test loss/quality metrics; target execution still required.
 
 **Environment validation:** pending actual target Spark/HDFS/PyTorch execution.
 
