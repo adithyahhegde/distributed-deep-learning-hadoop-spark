@@ -117,7 +117,9 @@ Every retained run captures:
 - hardware/cluster configuration;
 - Spark application ID;
 - git commit SHA;
-- seed and training configuration.
+- seed and training configuration;
+- exact trained model `state_dict` as a separate `.model.pt` artifact;
+- SHA-256 hash of that model artifact.
 
 The primary timing boundary is the elapsed time around the Spark 3.5.9 DataFrame-integrated TorchDistributor call. It therefore includes Spark barrier/data-transfer/orchestration overhead associated with the distributed training job. Worker-side model-computation time is retained separately and uses the synchronized maximum across workers rather than rank-0 time alone.
 
@@ -131,7 +133,7 @@ Startup and data-preparation measurements must be reported separately if they ar
 
 ## Predictive evaluation
 
-The trained rank-0 model state is retained in the run artifact. Validation and test predictions are evaluated using the same fixed model architecture and metric implementation.
+The trained rank-0 model state is retained as a serialized `.model.pt` artifact and referenced by path and SHA-256 hash in the JSON run artifact. Validation and test predictions are evaluated using the same fixed model architecture and metric implementation.
 
 Reported predictive metrics are:
 
@@ -161,7 +163,7 @@ Before the full experiment:
 6. confirm worker/process counts;
 7. verify process-group initialization and clean shutdown;
 8. verify metric consistency;
-9. verify retained metadata and run artifacts;
+9. verify retained metadata and run artifacts, including the serialized model artifact;
 10. freeze the environment and benchmark configuration.
 
 ## Interpretation guardrails
@@ -182,6 +184,8 @@ Before the full experiment:
 **Global batch-size control:** implemented; target execution still required.
 
 **Spark target version:** pinned to 3.5.9; exact target cluster execution still required.
+
+**Model artifact retention:** implemented with SHA-256 integrity metadata; target execution still required.
 
 **Environment validation:** pending actual target Spark/HDFS/PyTorch execution.
 
