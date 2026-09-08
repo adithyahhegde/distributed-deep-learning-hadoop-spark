@@ -1,7 +1,9 @@
-# Python dependencies. Exact versions must be frozen from the validated target environment
-# before benchmark runs; Spark/Hadoop/Java are cluster-level dependencies.
+# Python dependencies for the validated benchmark target.
+# Spark 3.5.9 is pinned because the DataFrame-integrated TorchDistributor path
+# is version-sensitive; the exact cluster Java/Hadoop installation is captured
+# in each retained run artifact.
 torch>=2.2,<3
-pyspark>=3.4,<4.3
+pyspark==3.5.9
 numpy>=1.26,<3
 pandas>=2.1,<3
 scikit-learn>=1.4,<2
