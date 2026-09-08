@@ -5,10 +5,13 @@ Primary path: HDFS Parquet -> Spark DataFrame -> TorchDistributor.train_on_dataf
 The benchmark consumes provenance-preserving pre-split HDFS paths so the UCI final 500,000 test
 observations remain untouched. This script records measurements and never fabricates results.
 
-Important: TorchDistributor.train_on_dataframe requires evenly divided input partitions. The
-preparation script therefore retains source_row_id; this runner uses source_row_id modulo the
-worker count to construct exactly equal worker buckets and verifies the partition sizes before
-starting distributed training.
+TorchDistributor.train_on_dataframe requires evenly divided input partitions. The preparation
+script therefore retains source_row_id; this runner uses source_row_id modulo the worker count
+to construct exactly equal worker buckets and verifies the partition sizes before training.
+
+The benchmark keeps the *global* batch size constant across worker counts. Each worker therefore
+uses local_batch_size = global_batch_size / workers, preventing worker-count changes from silently
+changing the optimization regime.
 """
 from __future__ import annotations
 
@@ -38,7 +41,7 @@ def build_model(torch):
     )
 
 
-def train_partition(num_samples: int, batch_size: int, epochs: int, learning_rate: float, seed: int):
+def train_partition(num_samples: int, global_batch_size: int, workers: int, epochs: int, learning_rate: float, seed: int):
     import os
     import time
     import torch
@@ -47,6 +50,14 @@ def train_partition(num_samples: int, batch_size: int, epochs: int, learning_rat
 
     rank = int(os.environ["RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
+    if world_size != workers:
+        raise RuntimeError(f"WORLD_SIZE={world_size} does not match requested workers={workers}")
+    if global_batch_size % workers != 0:
+        raise ValueError("global_batch_size must be divisible by workers")
+    local_batch_size = global_batch_size // workers
+    if local_batch_size <= 0:
+        raise ValueError("local_batch_size must be positive")
+
     torch.manual_seed(seed + rank)
     np.random.seed(seed + rank)
 
@@ -65,7 +76,7 @@ def train_partition(num_samples: int, batch_size: int, epochs: int, learning_rat
 
     loader = get_spark_partition_data_loader(
         num_samples=num_samples,
-        batch_size=batch_size,
+        batch_size=local_batch_size,
         num_workers=0,
     )
 
@@ -73,7 +84,7 @@ def train_partition(num_samples: int, batch_size: int, epochs: int, learning_rat
         torch.cuda.synchronize()
     start = time.perf_counter()
     last_loss = None
-    batches_per_epoch = math.ceil(num_samples / batch_size)
+    batches_per_epoch = math.ceil(num_samples / local_batch_size)
     for _ in range(epochs):
         epoch_batches = 0
         for batch in loader:
@@ -93,6 +104,9 @@ def train_partition(num_samples: int, batch_size: int, epochs: int, learning_rat
     if device.type == "cuda":
         torch.cuda.synchronize()
     elapsed = time.perf_counter() - start
+    elapsed_tensor = torch.tensor([elapsed], dtype=torch.float64, device=device)
+    dist.all_reduce(elapsed_tensor, op=dist.ReduceOp.MAX)
+    synchronized_elapsed = float(elapsed_tensor.item())
 
     state = {k: v.detach().cpu() for k, v in model.module.state_dict().items()}
     result = {
@@ -100,10 +114,12 @@ def train_partition(num_samples: int, batch_size: int, epochs: int, learning_rat
         "world_size": world_size,
         "device": str(device),
         "num_samples_per_worker": num_samples,
-        "batch_size": batch_size,
+        "global_batch_size": global_batch_size,
+        "local_batch_size": local_batch_size,
         "epochs": epochs,
         "learning_rate": learning_rate,
-        "training_seconds": elapsed,
+        "training_seconds_rank": elapsed,
+        "training_seconds_synchronized_max": synchronized_elapsed,
         "batches_per_epoch": batches_per_epoch,
         "last_batch_loss": last_loss,
         "state_dict": state if rank == 0 else None,
@@ -218,7 +234,7 @@ def main():
     parser.add_argument("--train-rows", type=int, required=True)
     parser.add_argument("--validation-rows", type=int, required=True)
     parser.add_argument("--test-rows", type=int, required=True)
-    parser.add_argument("--batch-size", type=int, default=1024)
+    parser.add_argument("--global-batch-size", type=int, default=1024)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
@@ -227,6 +243,8 @@ def main():
 
     if args.train_rows % args.workers != 0:
         raise ValueError("train_rows must be divisible by workers for exact partition sampling")
+    if args.global_batch_size % args.workers != 0:
+        raise ValueError("global_batch_size must be divisible by workers")
 
     from pyspark.sql import SparkSession
     from pyspark.ml.torch.distributor import TorchDistributor
@@ -267,10 +285,11 @@ def main():
 
         before_train = time.perf_counter()
         result = distributor.train_on_dataframe(
-            train_partition,
+            train_partition_df,
             train_partition_df,
             partition_rows,
-            args.batch_size,
+            args.global_batch_size,
+            args.workers,
             args.epochs,
             args.learning_rate,
             args.seed,
@@ -278,8 +297,8 @@ def main():
         end_train = time.perf_counter()
         distributed_training_seconds = end_train - before_train
 
-        validation_metrics = evaluate_streaming(validation, result["state_dict"], args.batch_size)
-        test_metrics = evaluate_streaming(test, result["state_dict"], args.batch_size)
+        validation_metrics = evaluate_streaming(validation, result["state_dict"], args.global_batch_size)
+        test_metrics = evaluate_streaming(test, result["state_dict"], args.global_batch_size)
         environment = collect_environment(spark)
         output = {
             "status": "completed",
@@ -291,15 +310,16 @@ def main():
             "partition_count": len(partition_sizes),
             "partition_sizes": partition_sizes,
             "partition_rows": partition_rows,
-            "batch_size": args.batch_size,
+            "global_batch_size": args.global_batch_size,
+            "local_batch_size": args.global_batch_size // args.workers,
             "epochs": args.epochs,
             "learning_rate": args.learning_rate,
             "seed": args.seed,
             "job_wall_clock_seconds": time.perf_counter() - start_job,
             "distributed_training_wall_clock_seconds": distributed_training_seconds,
-            "worker_training_seconds": result["training_seconds"],
+            "worker_training_seconds": result["training_seconds_synchronized_max"],
             "throughput_examples_per_second": args.train_rows / distributed_training_seconds,
-            "worker_compute_throughput_examples_per_second": args.train_rows / result["training_seconds"],
+            "worker_compute_throughput_examples_per_second": args.train_rows / result["training_seconds_synchronized_max"],
             "validation_metrics": validation_metrics,
             "test_metrics": test_metrics,
             "environment": environment,
