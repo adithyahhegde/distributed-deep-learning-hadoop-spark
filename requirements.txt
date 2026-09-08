@@ -1,0 +1,8 @@
+# Python dependencies. Exact versions must be frozen from the validated target environment
+# before benchmark runs; Spark/Hadoop/Java are cluster-level dependencies.
+torch>=2.2,<3
+pyspark>=3.4,<4.3
+numpy>=1.26,<3
+pandas>=2.1,<3
+scikit-learn>=1.4,<2
+pyarrow>=14,<22
