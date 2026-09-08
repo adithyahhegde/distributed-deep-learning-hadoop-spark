@@ -285,7 +285,7 @@ def main():
 
         before_train = time.perf_counter()
         result = distributor.train_on_dataframe(
-            train_partition_df,
+            train_partition,
             train_partition_df,
             partition_rows,
             args.global_batch_size,
