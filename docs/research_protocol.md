@@ -11,11 +11,13 @@ How does increasing distributed worker count affect training time, speedup, scal
 ## System boundary
 
 - **Hadoop/HDFS:** storage and cluster/data ecosystem.
-- **Apache Spark:** distributed orchestration and execution layer.
+- **Apache Spark 3.5.9:** distributed orchestration and execution layer.
 - **PyTorch:** model training and optimization.
 - **Spark TorchDistributor:** distributed bridge used for PyTorch training.
 
 Hadoop MapReduce and Spark are not treated as competing deep-learning frameworks. The experiment evaluates a Spark-orchestrated PyTorch training path with HDFS as the distributed storage layer.
+
+The DataFrame-integrated TorchDistributor path is version-sensitive. The benchmark therefore pins PySpark 3.5.9 and uses Spark 3.5.9's `_train_on_dataframe` implementation explicitly rather than assuming a stable cross-version public API.
 
 ## Primary dataset and provenance
 
@@ -49,7 +51,8 @@ The benchmark uses a small feed-forward binary classifier so the systems questio
 - Loss: `BCEWithLogitsLoss`.
 - Optimizer: Adam.
 - Learning rate: **0.001**.
-- Batch size: **1,024**.
+- Global batch size: **1,024**.
+- Local batch size: **1,024 / workers**; therefore the effective global batch size is held constant across worker counts.
 - Epoch budget: **5**.
 - Seed: **42**, with rank-specific deterministic offsets for worker initialization.
 - Preprocessing: none in the locked benchmark protocol.
@@ -74,7 +77,7 @@ For worker-scaling comparisons, keep constant:
 
 - model architecture;
 - optimizer and learning rate;
-- batch size;
+- **global batch size** and resulting fixed effective optimization regime;
 - epoch budget;
 - random-seed policy;
 - train/validation/test definitions;
@@ -86,7 +89,7 @@ For worker-scaling comparisons, keep constant:
 
 ## TorchDistributor partitioning gate
 
-`TorchDistributor.train_on_dataframe` requires the input DataFrame to have evenly divided partitions, because each Spark task processes one partition. Divisibility of the total row count alone does not prove that generic Spark repartitioning produced equal partitions.
+The Spark DataFrame-integrated TorchDistributor path requires the input DataFrame to have evenly divided partitions, because each Spark task processes one partition. Divisibility of the total row count alone does not prove that generic Spark repartitioning produced equal partitions.
 
 The repository therefore uses the retained `source_row_id` to assign each training row to `source_row_id mod workers`, repartitions by that deterministic worker bucket, counts the resulting Spark partitions, and refuses to start training unless every partition contains exactly `train_rows / workers` observations. This verification is retained as run metadata.
 
@@ -94,7 +97,7 @@ This gate is necessary for interpreting worker-count comparisons as controlled c
 
 ## Primary baseline definition
 
-The primary speedup baseline is **one worker using the same `TorchDistributor.train_on_dataframe` execution path** and the same HDFS data, model, optimizer, batch size, epoch budget, timing boundary, and software environment.
+The primary speedup baseline is **one worker using the same Spark 3.5.9 TorchDistributor DataFrame-integrated execution path** and the same HDFS data, model, optimizer, global batch size, epoch budget, timing boundary, and software environment.
 
 This baseline is intentionally different from a native single-process PyTorch baseline. A native PyTorch run can be reported as a secondary comparison, but it must not be silently substituted for the one-worker Spark/TorchDistributor denominator because that would confound distributed scaling with framework/storage differences.
 
@@ -103,7 +106,7 @@ This baseline is intentionally different from a native single-process PyTorch ba
 Every retained run captures:
 
 - distributed training wall-clock time;
-- worker-side training time;
+- synchronized maximum worker-side training time;
 - total job wall-clock time;
 - examples/second;
 - validation and test metrics;
@@ -116,7 +119,7 @@ Every retained run captures:
 - git commit SHA;
 - seed and training configuration.
 
-The primary timing boundary is the elapsed time around `TorchDistributor.train_on_dataframe`. It therefore includes Spark barrier/data-transfer/orchestration overhead associated with the distributed training job. Worker-side model-computation time is retained separately.
+The primary timing boundary is the elapsed time around the Spark 3.5.9 DataFrame-integrated TorchDistributor call. It therefore includes Spark barrier/data-transfer/orchestration overhead associated with the distributed training job. Worker-side model-computation time is retained separately and uses the synchronized maximum across workers rather than rank-0 time alone.
 
 For worker count `p`, with one-worker baseline time `T1` and distributed time `Tp`:
 
@@ -153,7 +156,7 @@ Before the full experiment:
 1. validate the HDFS data path;
 2. validate Spark reading of the prepared Parquet splits;
 3. validate Spark-to-PyTorch distributed execution;
-4. verify `TorchDistributor.train_on_dataframe` and the partition data loader in the target Spark version;
+4. verify the Spark 3.5.9 TorchDistributor DataFrame-integrated path and partition data loader in the target environment;
 5. run a small end-to-end pilot;
 6. confirm worker/process counts;
 7. verify process-group initialization and clean shutdown;
@@ -175,6 +178,10 @@ Before the full experiment:
 **Research design:** locked for pilot execution.
 
 **Partition-balance correctness gate:** implemented and statically validated; target execution still required.
+
+**Global batch-size control:** implemented; target execution still required.
+
+**Spark target version:** pinned to 3.5.9; exact target cluster execution still required.
 
 **Environment validation:** pending actual target Spark/HDFS/PyTorch execution.
 
