@@ -3,23 +3,23 @@ study:
   dataset: "UCI HIGGS"
   question: "How does increasing distributed worker count affect training time, speedup, scaling efficiency, and predictive performance when Spark orchestrates distributed PyTorch training over HDFS?"
 
-# These are protocol candidates, not fabricated results.
-# Final feasibility-dependent values must be confirmed after the pilot.
+# Locked before empirical benchmarking. No result values are stored here.
 workers:
   candidate: [1, 2, 4, 8]
-  rule: "Run only levels supported reliably by the target environment."
+  rule: "Run only levels supported reliably by the validated target environment."
 
 training_rows:
-  candidate: [1000000, 2500000, 5000000, 10500000]
-  rule: "All subsets must come only from the development training partition."
-
+  candidate: [1000000, 2500000, 5000000, 10000000]
+  rule: "Training subsets are drawn only from the fixed 10,000,000-row training partition."
+validation_rows: 500000
 test_rows: 500000
 
 data_split:
   source_rows: 11000000
+  training_rows: 10000000
+  validation_rows: 500000
   official_test_rows: 500000
-  development_rows: 10500000
-  validation_fraction: "TBD before benchmark"
+  rule: "The UCI final 500,000 observations are preserved as test; the preceding 10,500,000 are split into 10,000,000 training and 500,000 validation by the repository preparation script."
   seed: 42
 
 model:
@@ -30,33 +30,41 @@ model:
   output: 1
   loss: "BCEWithLogitsLoss"
   optimizer: "Adam"
-  learning_rate: "TBD before benchmark"
-  batch_size: "TBD before benchmark"
-  epochs: "TBD before benchmark"
+  learning_rate: 0.001
+  batch_size: 1024
+  epochs: 5
   seed: 42
+  preprocessing: "none unless a pre-benchmark pilot establishes a fixed, leakage-free transform; no per-worker tuning"
 
 execution:
   orchestration: "Apache Spark"
-  training: "PyTorch"
-  distributor: "TorchDistributor"
+  training: "PyTorch DistributedDataParallel"
+  distributor: "TorchDistributor.train_on_dataframe"
   storage: "HDFS"
-  baseline: "TBD; must explicitly distinguish single-machine PyTorch from single-worker distributed execution"
+  prepared_format: "Parquet"
+  baseline: "1-worker TorchDistributor run using the identical HDFS split, model, optimizer, batch size, epoch budget, timing boundary, and software environment"
+  secondary_baseline: "Native single-process PyTorch may be evaluated only as a separately labelled comparison; it is not the primary speedup denominator"
 
 metrics:
-  - wall_clock_training_seconds
-  - startup_and_data_loading_seconds
-  - examples_per_second
-  - speedup
-  - scaling_efficiency
-  - training_loss
-  - validation_loss
-  - roc_auc
-  - accuracy
-  - resource_utilization_when_reliable
+  primary:
+    - distributed_training_wall_clock_seconds
+    - examples_per_second
+    - speedup_vs_1_worker
+    - scaling_efficiency
+  predictive:
+    - training_loss
+    - validation_loss
+    - roc_auc
+    - accuracy
+    - log_loss
+  secondary:
+    - job_wall_clock_seconds
+    - worker_training_seconds
+    - resource_utilization_when_reliable
 
 repetitions:
   target: 3
-  minimum_rule: "Use at least three retained runs where feasible; otherwise document the limitation."
+  minimum_rule: "Use at least three retained runs per condition where feasible; otherwise report the limitation and avoid overstating stability."
 
 integrity:
   fabricate_results: false
@@ -65,3 +73,5 @@ integrity:
   require_retained_run_artifact: true
   require_environment_metadata: true
   preserve_official_test_set: true
+  no_hyperparameter_tuning_by_worker_count: true
+  no_result_without_run_artifact: true
