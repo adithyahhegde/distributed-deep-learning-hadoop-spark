@@ -43,6 +43,9 @@ execution:
   distributor: "TorchDistributor._train_on_dataframe"
   storage: "HDFS"
   prepared_format: "Parquet"
+  scaling_design: "strong_scaling"
+  scaling_rule: "At a fixed training-data volume, worker-count comparisons increase available Spark task parallelism/resources while keeping model, data, global batch, epochs, software, and storage representation fixed. The benchmark must run with at least one schedulable CPU core per TorchDistributor process and record the actual resource allocation."
+  resource_gate: "Do not accept a worker-count run unless the validated environment can concurrently schedule the requested number of Spark tasks without intentional oversubscription; record spark master, default parallelism, executor cores/instances, memory, and dynamic-allocation settings."
   baseline: "1-worker TorchDistributor run using the identical HDFS split, model, optimizer, global batch size, epoch budget, timing boundary, and software environment"
   secondary_baseline: "Native single-process PyTorch may be evaluated only as a separately labelled comparison; it is not the primary speedup denominator"
 
@@ -55,9 +58,11 @@ metrics:
   predictive:
     - training_loss
     - validation_loss
-    - roc_auc
-    - accuracy
-    - log_loss
+    - validation_roc_auc
+    - validation_accuracy
+    - test_loss
+    - test_roc_auc
+    - test_accuracy
   secondary:
     - job_wall_clock_seconds
     - synchronized_max_worker_training_seconds
