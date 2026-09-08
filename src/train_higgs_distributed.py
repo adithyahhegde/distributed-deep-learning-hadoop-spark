@@ -185,8 +185,7 @@ def read_higgs(spark, path: str, include_source_row_id: bool = False):
     schema_fields += [T.StructField(f"f{i}", T.DoubleType(), False) for i in range(28)]
     if include_source_row_id:
         schema_fields.append(T.StructField("source_row_id", T.LongType(), False))
-    df = spark.read.schema(T.StructType(schema_fields)).parquet(path)
-    return df
+    return spark.read.schema(T.StructType(schema_fields)).parquet(path)
 
 
 def exact_worker_partition(df, workers: int, train_rows: int):
@@ -207,7 +206,7 @@ def exact_worker_partition(df, workers: int, train_rows: int):
             "TorchDistributor requires evenly divided partitions; observed "
             f"{partition_sizes}, expected {[expected] * workers}"
         )
-    return bucketed.select("source_row_id", *COLUMNS), partition_sizes
+    return bucketed.select(*COLUMNS), partition_sizes
 
 
 def main():
@@ -256,7 +255,9 @@ def main():
                 f"train={actual_train}, validation={actual_validation}, test={actual_test}"
             )
 
-        train, partition_sizes = exact_worker_partition(train, args.workers, args.train_rows)
+        train_partition_df, partition_sizes = exact_worker_partition(
+            train, args.workers, args.train_rows
+        )
         partition_rows = args.train_rows // args.workers
         distributor = TorchDistributor(
             num_processes=args.workers,
@@ -266,8 +267,8 @@ def main():
 
         before_train = time.perf_counter()
         result = distributor.train_on_dataframe(
-            train.select(*COLUMNS),
             train_partition,
+            train_partition_df,
             partition_rows,
             args.batch_size,
             args.epochs,
