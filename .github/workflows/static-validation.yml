@@ -22,7 +22,8 @@ jobs:
             src/environment_check.py \
             src/pilot_torch_distributor.py \
             src/prepare_higgs_splits.py \
-            src/train_higgs_distributed.py
+            src/train_higgs_distributed.py \
+            src/analyze_runs.py
       - name: Validate experiment configuration
         run: |
           python - <<'PY'
