@@ -9,9 +9,9 @@ How does increasing distributed worker count affect training time, speedup, scal
 ## Technology boundary
 
 - **HDFS/Hadoop:** storage and cluster/data ecosystem.
-- **Apache Spark:** distributed orchestration and execution layer.
+- **Apache Spark 3.5.9:** distributed orchestration and execution layer.
 - **PyTorch:** model training and optimization.
-- **TorchDistributor:** Spark-to-PyTorch distributed execution path.
+- **TorchDistributor:** Spark-to-PyTorch distributed execution path; the benchmark uses Spark 3.5.9's DataFrame-integrated `_train_on_dataframe` path because this API is version-sensitive and is not treated as a cross-version public contract.
 
 The study does not treat Hadoop MapReduce and Spark as competing deep-learning frameworks. It evaluates one explicitly defined Spark + PyTorch path while treating HDFS as the storage/cluster layer.
 
@@ -38,7 +38,7 @@ Training datasets retain a deterministic source row identifier so worker partiti
 - Loss: BCEWithLogitsLoss.
 - Optimizer: Adam.
 - Learning rate: 0.001.
-- Batch size: 1,024.
+- **Global batch size: 1,024.** Local batch size is 1,024 / worker count so the effective global batch remains constant.
 - Epochs: 5.
 - Seed: 42.
 - Primary baseline: 1-worker TorchDistributor using the same HDFS/Parquet path and timing boundary.
@@ -53,7 +53,7 @@ Training datasets retain a deterministic source row identifier so worker partiti
 - `src/environment_check.py` — captures actual Python/library/cluster runtime metadata.
 - `src/prepare_higgs_splits.py` — creates provenance-preserving HDFS splits and exact training-volume datasets.
 - `src/pilot_torch_distributor.py` — minimal synthetic TorchDistributor orchestration pilot; not a benchmark.
-- `src/train_higgs_distributed.py` — real HIGGS Spark/TorchDistributor training and evaluation runner with exact partition verification.
+- `src/train_higgs_distributed.py` — real HIGGS Spark/TorchDistributor training and evaluation runner with exact partition verification and fixed global batch-size control.
 - `src/analyze_runs.py` — conservative aggregation of retained actual-run artifacts; missing baselines are never imputed.
 - `docs/pilot_runbook.md` — environment gate and benchmark execution procedure.
 
@@ -70,8 +70,9 @@ No result, graph, timing, speedup, predictive metric, or resource measurement is
 - Literature matrix: **established; source register verified**
 - Experiment protocol: **locked for pilot**
 - TorchDistributor partition-balance gate: **implemented and statically validated**
+- Global batch-size control: **implemented to keep optimization regime comparable across worker counts**
+- Spark target version: **pinned to 3.5.9**
 - Formatting benchmark: **verified from rendered prior paper**
-- Static validation workflow: **committed; latest validation run passed before the subsequent documentation/analysis commits**
 - Target distributed environment: **not yet validated**
 - HDFS prepared dataset: **not yet generated in target environment**
 - Synthetic distributed pilot: **not yet run in target environment**
