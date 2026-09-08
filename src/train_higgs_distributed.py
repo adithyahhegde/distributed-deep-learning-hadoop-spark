@@ -255,6 +255,7 @@ def main():
             args.seed,
         )
         end_train = time.perf_counter()
+        distributed_training_seconds = end_train - before_train
 
         validation_metrics = evaluate_streaming(validation, result["state_dict"], args.batch_size)
         test_metrics = evaluate_streaming(test, result["state_dict"], args.batch_size)
@@ -272,9 +273,10 @@ def main():
             "learning_rate": args.learning_rate,
             "seed": args.seed,
             "job_wall_clock_seconds": time.perf_counter() - start_job,
-            "distributed_training_wall_clock_seconds": end_train - before_train,
+            "distributed_training_wall_clock_seconds": distributed_training_seconds,
             "worker_training_seconds": result["training_seconds"],
-            "throughput_examples_per_second": args.train_rows / result["training_seconds"],
+            "throughput_examples_per_second": args.train_rows / distributed_training_seconds,
+            "worker_compute_throughput_examples_per_second": args.train_rows / result["training_seconds"],
             "validation_metrics": validation_metrics,
             "test_metrics": test_metrics,
             "environment": environment,
