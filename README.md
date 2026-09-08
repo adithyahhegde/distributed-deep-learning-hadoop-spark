@@ -28,6 +28,8 @@ The preparation pipeline creates exact HDFS-backed Parquet datasets for:
 - 500,000 validation rows
 - 500,000 official test rows
 
+Training datasets retain a deterministic source row identifier so worker partitions can be made exactly equal and verified before distributed training.
+
 ## Locked benchmark configuration
 
 - Workers: 1, 2, 4, 8, subject to environment feasibility.
@@ -43,7 +45,7 @@ The preparation pipeline creates exact HDFS-backed Parquet datasets for:
 
 ## Repository controls
 
-- `docs/research_protocol.md` — locked research logic, leakage controls, metrics, baseline rules, and interpretation guardrails.
+- `docs/research_protocol.md` — locked research logic, leakage controls, partition-balance gate, metrics, baseline rules, and interpretation guardrails.
 - `docs/literature_matrix.md` — literature synthesis and research-gap tracking.
 - `docs/references_verified.md` — checked scholarly, dataset, and official technology source register.
 - `docs/paper_format_spec.md` — verified visual/layout benchmark from the prior Operations/Capacity Planning paper.
@@ -51,7 +53,8 @@ The preparation pipeline creates exact HDFS-backed Parquet datasets for:
 - `src/environment_check.py` — captures actual Python/library/cluster runtime metadata.
 - `src/prepare_higgs_splits.py` — creates provenance-preserving HDFS splits and exact training-volume datasets.
 - `src/pilot_torch_distributor.py` — minimal synthetic TorchDistributor orchestration pilot; not a benchmark.
-- `src/train_higgs_distributed.py` — real HIGGS Spark/TorchDistributor training and evaluation runner.
+- `src/train_higgs_distributed.py` — real HIGGS Spark/TorchDistributor training and evaluation runner with exact partition verification.
+- `src/analyze_runs.py` — conservative aggregation of retained actual-run artifacts; missing baselines are never imputed.
 - `docs/pilot_runbook.md` — environment gate and benchmark execution procedure.
 
 ## Experimental integrity
@@ -66,8 +69,9 @@ No result, graph, timing, speedup, predictive metric, or resource measurement is
 - Dataset/provenance controls: **locked**
 - Literature matrix: **established; source register verified**
 - Experiment protocol: **locked for pilot**
+- TorchDistributor partition-balance gate: **implemented and statically validated**
 - Formatting benchmark: **verified from rendered prior paper**
-- Static validation workflow: **committed; execution status must be checked in GitHub Actions**
+- Static validation workflow: **committed; latest validation run passed before the subsequent documentation/analysis commits**
 - Target distributed environment: **not yet validated**
 - HDFS prepared dataset: **not yet generated in target environment**
 - Synthetic distributed pilot: **not yet run in target environment**
