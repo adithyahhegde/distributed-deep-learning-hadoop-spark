@@ -26,6 +26,15 @@ def sample_std(values):
     return math.sqrt(sum((x - m) ** 2 for x in values) / (len(values) - 1))
 
 
+def metric_summary(items, key):
+    values = []
+    for _, obj in items:
+        value = obj.get(key)
+        if value is not None:
+            values.append(float(value))
+    return mean(values), sample_std(values)
+
+
 def load_artifacts(root: Path):
     rows = []
     for path in sorted(root.rglob("*.json")):
@@ -40,6 +49,13 @@ def load_artifacts(root: Path):
             "train_rows",
             "distributed_training_wall_clock_seconds",
             "throughput_examples_per_second",
+            "training_loss",
+            "validation_loss",
+            "validation_roc_auc",
+            "validation_accuracy",
+            "test_loss",
+            "test_roc_auc",
+            "test_accuracy",
         ]
         if any(key not in obj for key in required):
             continue
@@ -62,18 +78,29 @@ def main():
     for (train_rows, workers), items in sorted(groups.items()):
         times = [float(obj["distributed_training_wall_clock_seconds"]) for _, obj in items]
         throughput = [float(obj["throughput_examples_per_second"]) for _, obj in items]
-        summary.append(
-            {
-                "train_rows": train_rows,
-                "workers": workers,
-                "retained_runs": len(items),
-                "training_seconds_mean": mean(times),
-                "training_seconds_std": sample_std(times),
-                "throughput_mean": mean(throughput),
-                "throughput_std": sample_std(throughput),
-                "artifact_paths": [str(path) for path, _ in items],
-            }
-        )
+        row = {
+            "train_rows": train_rows,
+            "workers": workers,
+            "retained_runs": len(items),
+            "training_seconds_mean": mean(times),
+            "training_seconds_std": sample_std(times),
+            "throughput_mean": mean(throughput),
+            "throughput_std": sample_std(throughput),
+            "artifact_paths": [str(path) for path, _ in items],
+        }
+        for metric in (
+            "training_loss",
+            "validation_loss",
+            "validation_roc_auc",
+            "validation_accuracy",
+            "test_loss",
+            "test_roc_auc",
+            "test_accuracy",
+        ):
+            metric_mean, metric_std = metric_summary(items, metric)
+            row[f"{metric}_mean"] = metric_mean
+            row[f"{metric}_std"] = metric_std
+        summary.append(row)
 
     baseline_by_rows = {}
     for row in summary:
