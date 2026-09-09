@@ -4,7 +4,7 @@
 **PES1PG25MB432**  
 **MBA Trimester III**  
 **PES University**  
-**Faculty: Nitesh Rajamani**
+**Faculty: Nitish Rajamane**
 
 > **WORKING MANUSCRIPT — EMPIRICAL RESULTS PENDING**
 >
