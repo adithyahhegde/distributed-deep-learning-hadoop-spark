@@ -14,8 +14,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install static-validation dependency
-        run: python -m pip install --disable-pip-version-check --no-input PyYAML
+      - name: Install static-validation dependencies
+        run: python -m pip install --disable-pip-version-check --no-input PyYAML pytest numpy
       - name: Compile research scripts
         run: |
           python -m py_compile \
@@ -24,6 +24,8 @@ jobs:
             src/prepare_higgs_splits.py \
             src/train_higgs_distributed.py \
             src/analyze_runs.py
+      - name: Run benchmark integrity regression tests
+        run: python -m pytest -q tests/test_benchmark_invariants.py
       - name: Validate experiment configuration
         run: |
           python - <<'PY'
