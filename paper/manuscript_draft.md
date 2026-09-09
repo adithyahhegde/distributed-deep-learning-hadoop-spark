@@ -46,11 +46,15 @@ The study evaluates one fixed feed-forward binary classifier, one public dataset
 
 ## 2. LITERATURE REVIEW
 
-BigDL established a Spark-native distributed deep-learning approach and demonstrated the feasibility of running deep-learning applications on Hadoop/Spark clusters. Cruz, Tous, and Otero evaluated distributed deep-learning deployment with Spark on MareNostrum and emphasized parallelism, storage, networking, and configuration. Langer, Hall, He, and Rahayu proposed MPCA-SGD for distributed deep learning on Spark and examined practical scalability constraints. DLoBD characterized multiple deep-learning-over-big-data stacks in terms of performance, scalability, accuracy, and resource utilization. Ahn, Kim, and You examined Spark on YARN and TensorFlowOnSpark. Phan and Do later discussed obstacles encountered when using Spark for distributed DNN training and proposed an alternative framework independent of Spark.
+Foundational distributed-learning research established that scaling model training is a systems problem involving synchronization, communication, consistency, and hardware utilization. Dean et al. introduced DistBelief and distributed procedures such as Downpour SGD and Sandblaster, demonstrating the use of large clusters for deep-network training. Chilimbi et al.'s Project Adam further emphasized whole-system co-design and balancing computation with communication. Li et al. formalized a parameter-server architecture for distributed machine learning with distributed workers, shared parameters, flexible consistency, and fault tolerance. Abadi et al. presented TensorFlow as a large-scale dataflow system for mapping machine-learning computations across heterogeneous clusters. These studies provide the general distributed-training foundation against which Spark-oriented approaches can be understood.
+
+Spark-specific work then explored whether a general-purpose data-processing framework could support deep-learning workloads. BigDL established a Spark/Hadoop-integrated distributed deep-learning approach, while Langer et al. proposed MPCA-SGD for distributed deep learning on Spark. Cruz, Tous, and Otero studied deployment and performance on the MareNostrum supercomputer, highlighting the effects of parallelism, storage, and networking. Lu et al. compared multiple deep-learning-over-big-data stacks, including CaffeOnSpark, TensorFlowOnSpark, MMLSpark/CNTKOnSpark, and BigDL. Ahn, Kim, and You examined distributed big-data analysis on YARN and TensorFlowOnSpark. Hamilton et al. described MMLSpark as an integration of deep learning, Spark, and related data-processing components. These studies collectively show that framework overhead, data movement, storage, communication, and cluster configuration can materially influence observed training performance.
+
+More recent work extends the Spark ecosystem rather than resolving the exact configuration studied here. Dai et al. presented BigDL 2.0 as a path for scaling AI pipelines from single-node environments to distributed clusters. Phan and Do documented performance obstacles encountered in Spark-based distributed DNN training and proposed a framework independent of Spark. The current study deliberately retains these works as context rather than treating them as direct substitutes for Spark 3.5.9 TorchDistributor with PyTorch.
 
 ### 2.1 Research Gap
 
-The literature provides strong historical evidence for distributed deep learning over Spark/Hadoop stacks, but it does not directly answer the controlled question posed here: how a current Spark-to-PyTorch integration behaves as worker count and training-data volume vary under a fixed model, global batch size, dataset split, software version, and reproducibility protocol. The proposed contribution is therefore a controlled empirical evaluation of this execution path rather than a claim of universal superiority.
+The literature provides strong historical and systems evidence for distributed deep learning over Spark/Hadoop stacks, but it does not directly answer the controlled question posed here: how a current Spark-to-PyTorch integration behaves as worker count and training-data volume vary under a fixed model, global batch size, dataset split, software version, and reproducibility protocol. The proposed contribution is therefore a controlled empirical evaluation of this execution path rather than a claim of universal superiority.
 
 ## 3. RESEARCH FRAMEWORK AND ARCHITECTURE
 
@@ -141,13 +145,25 @@ This study establishes a controlled research design for evaluating distributed d
 
 ## References
 
+Abadi, M., Barham, P., Chen, J., Chen, Z., Davis, A., Dean, J., Devin, M., Ghemawat, S., Irving, G., Isard, M., Kudlur, M., Levenberg, J., Monga, R., Moore, S., Murray, D. G., Steiner, B., Tucker, P., Vasudevan, V., Warden, P., Wicke, M., Yu, Y., & Zheng, X. (2016). TensorFlow: A system for large-scale machine learning. *Proceedings of the 12th USENIX Symposium on Operating Systems Design and Implementation (OSDI '16)*, 265–283.
+
 Ahn, H.-Y., Kim, H., & You, W. (2018). Performance study of distributed big data analysis in YARN cluster. *2018 International Conference on Information and Communication Technology Convergence (ICTC)*, 1261–1266. https://doi.org/10.1109/ICTC.2018.8539474
+
+Chilimbi, T., Suzue, Y., Apacible, J., & Kalyanaraman, K. (2014). Project Adam: Building an efficient and scalable deep learning training system. *Proceedings of the 11th USENIX Symposium on Operating Systems Design and Implementation (OSDI '14)*, 571–582.
 
 Cruz, L., Tous, R., & Otero, B. (2019). Distributed training of deep neural networks with Spark: The MareNostrum experience. *Pattern Recognition Letters, 125*, 174–178. https://doi.org/10.1016/j.patrec.2019.01.020
 
 Dai, J., Wang, Y., Qiu, X., et al. (2019). BigDL: A distributed deep learning framework for big data. *Proceedings of the ACM Symposium on Cloud Computing*, 50–60. https://doi.org/10.1145/3357223.3362707
 
+Dai, J., Ding, D., Shi, D., Huang, S., Wang, J., Qiu, X., Huang, K., Song, G., Wang, Y., Gong, Q., Song, J., Yu, S., Zheng, L., Chen, Y., Deng, J., & Song, G. (2022). BigDL 2.0: Seamless scaling of AI pipelines from laptops to distributed cluster. *Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)*, 21439–21446. https://doi.org/10.1109/CVPR52688.2022.02076
+
+Dean, J., Corrado, G., Monga, R., Chen, K., Devin, M., Mao, M. Z., Ranzato, M., Senior, A., Tucker, P., Yang, K., Le, Q. V., & Ng, A. Y. (2012). Large scale distributed deep networks. *Advances in Neural Information Processing Systems, 25*.
+
+Hamilton, M., Raghunathan, S., Annavajhala, A., Kirsanov, D., Leon, E., Barzilay, E., Matiach, I., Davison, J., Busch, M., Oprescu, M., Sur, R., Astala, R., Wen, T., & Park, C. (2018). Flexible and scalable deep learning with MMLSpark. *Proceedings of the 4th International Conference on Predictive Applications and APIs, PMLR 82*, 11–22.
+
 Langer, M., Hall, A., He, Z., & Rahayu, W. (2018). MPCA SGD—A method for distributed training of deep learning models on Spark. *IEEE Transactions on Parallel and Distributed Systems, 29*(11), 2540–2556. https://doi.org/10.1109/TPDS.2018.2833074
+
+Li, M., Andersen, D. G., Park, J. W., Smola, A. J., Ahmed, A., Josifovski, V., Long, J., Shekita, E. J., & Su, B.-Y. (2014). Scaling distributed machine learning with the parameter server. *Proceedings of the 11th USENIX Symposium on Operating Systems Design and Implementation (OSDI '14)*, 583–598.
 
 Lu, X., Shi, H., Biswas, R., Javed, M. H., & Panda, D. K. (2018). DLoBD: A comprehensive study of deep learning over big data stacks on HPC clusters. *IEEE Transactions on Multi-Scale Computing Systems, 4*(4), 635–648. https://doi.org/10.1109/TMSCS.2018.2845886
 
