@@ -4,7 +4,8 @@
 This script is intentionally conservative: it only consumes JSON artifacts whose
 measurement_type is ``actual_run`` and whose status is ``completed``. Speedup and
 scaling efficiency are calculated only when a matching one-worker baseline exists
-for the same training volume. Missing or incomplete conditions remain missing.
+for the same training volume *and benchmark signature*. Missing or incomparable
+conditions remain missing.
 
 A completed JSON file is not accepted as evidence merely because it contains
 plausible-looking metric fields. Its retained model artifact, SHA-256 integrity
@@ -19,6 +20,9 @@ import json
 import math
 from collections import defaultdict
 from pathlib import Path
+
+EXPECTED_VALIDATION_ROWS = 500_000
+EXPECTED_TEST_ROWS = 500_000
 
 
 def mean(values):
@@ -62,6 +66,9 @@ def validate_completed_artifact(json_path: Path, obj: dict) -> list[str]:
     errors = []
     required = [
         "artifact_schema_version",
+        "run_id",
+        "run_started_utc",
+        "benchmark_signature",
         "workers",
         "train_rows",
         "validation_rows",
@@ -95,14 +102,27 @@ def validate_completed_artifact(json_path: Path, obj: dict) -> list[str]:
     if errors:
         return errors
 
+    if not str(obj["run_id"]).strip():
+        errors.append("run_id is empty")
+    if not str(obj["run_started_utc"]).strip():
+        errors.append("run_started_utc is empty")
+    if not str(obj["benchmark_signature"]).strip():
+        errors.append("benchmark_signature is empty")
+
     workers = int(obj["workers"])
     train_rows = int(obj["train_rows"])
+    validation_rows = int(obj["validation_rows"])
+    test_rows = int(obj["test_rows"])
     partition_sizes = [int(x) for x in obj["partition_sizes"]]
     expected_partition_rows = train_rows // workers if workers > 0 else -1
     if workers < 1:
         errors.append("workers must be >= 1")
     if train_rows < 1:
         errors.append("train_rows must be > 0")
+    if validation_rows != EXPECTED_VALIDATION_ROWS:
+        errors.append(f"validation_rows must equal {EXPECTED_VALIDATION_ROWS}")
+    if test_rows != EXPECTED_TEST_ROWS:
+        errors.append(f"test_rows must equal {EXPECTED_TEST_ROWS}")
     if int(obj["partition_count"]) != workers:
         errors.append("partition_count does not equal workers")
     if len(partition_sizes) != workers:
@@ -161,6 +181,7 @@ def validate_completed_artifact(json_path: Path, obj: dict) -> list[str]:
 def load_artifacts(root: Path):
     rows = []
     rejected = []
+    seen_run_ids = set()
     for path in sorted(root.rglob("*.json")):
         try:
             obj = json.loads(path.read_text(encoding="utf-8"))
@@ -169,9 +190,13 @@ def load_artifacts(root: Path):
         if obj.get("measurement_type") != "actual_run" or obj.get("status") != "completed":
             continue
         errors = validate_completed_artifact(path, obj)
+        run_id = str(obj.get("run_id", ""))
+        if run_id and run_id in seen_run_ids:
+            errors.append(f"duplicate run_id already accepted: {run_id}")
         if errors:
             rejected.append({"path": str(path), "reasons": errors})
             continue
+        seen_run_ids.add(run_id)
         rows.append((path, obj))
     return rows, rejected
 
@@ -185,13 +210,14 @@ def main():
     artifacts, rejected = load_artifacts(Path(args.input))
     groups = defaultdict(list)
     for path, obj in artifacts:
-        groups[(int(obj["train_rows"]), int(obj["workers"]))].append((path, obj))
+        groups[(str(obj["benchmark_signature"]), int(obj["train_rows"]), int(obj["workers"]))].append((path, obj))
 
     summary = []
-    for (train_rows, workers), items in sorted(groups.items()):
+    for (signature, train_rows, workers), items in sorted(groups.items()):
         times = [float(obj["distributed_training_wall_clock_seconds"]) for _, obj in items]
         throughput = [float(obj["throughput_examples_per_second"]) for _, obj in items]
         row = {
+            "benchmark_signature": signature,
             "train_rows": train_rows,
             "workers": workers,
             "retained_runs": len(items),
@@ -215,13 +241,13 @@ def main():
             row[f"{metric}_std"] = metric_std
         summary.append(row)
 
-    baseline_by_rows = {}
+    baseline_by_signature_and_rows = {}
     for row in summary:
         if row["workers"] == 1 and row["retained_runs"] > 0:
-            baseline_by_rows[row["train_rows"]] = row["training_seconds_mean"]
+            baseline_by_signature_and_rows[(row["benchmark_signature"], row["train_rows"])] = row["training_seconds_mean"]
 
     for row in summary:
-        baseline = baseline_by_rows.get(row["train_rows"])
+        baseline = baseline_by_signature_and_rows.get((row["benchmark_signature"], row["train_rows"]))
         if baseline is None or row["training_seconds_mean"] is None:
             row["speedup_vs_1_worker"] = None
             row["scaling_efficiency"] = None
@@ -236,7 +262,7 @@ def main():
         "rejected_artifact_count": len(rejected),
         "rejected_artifacts": rejected,
         "conditions": summary,
-        "note": "Only completed actual-run artifacts passing integrity validation are analyzed. No values are imputed. Speedup and scaling efficiency remain null when a matching one-worker baseline is unavailable.",
+        "note": "Only completed actual-run artifacts passing integrity validation are analyzed. Speedup and scaling efficiency are derived only within the same benchmark signature and training volume; no values are imputed across software, hardware, or configuration changes.",
     }
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
