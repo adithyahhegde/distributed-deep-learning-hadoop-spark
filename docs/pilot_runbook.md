@@ -50,6 +50,7 @@ spark-submit \
   --steps 5 \
   --batch-size 64 \
   --seed 42 \
+  --git-sha <exact-repository-commit-sha> \
   --output pilot_result.json
 ```
 
@@ -68,7 +69,7 @@ The pilot passes only if:
 - The environment provides at least one schedulable CPU core per requested TorchDistributor process without intentional oversubscription.
 - Dynamic allocation is disabled for the controlled pilot/benchmark unless a separately documented design requires it.
 - A retained JSON result and environment report are produced.
-- The git commit SHA used for the pilot is recorded.
+- The git commit SHA used for the pilot is recorded in the pilot artifact.
 
 A successful synthetic pilot proves orchestration only. It does **not** prove HIGGS data loading, benchmark scalability, or predictive performance.
 
