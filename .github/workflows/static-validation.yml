@@ -35,7 +35,9 @@ jobs:
           assert cfg["integrity"]["preserve_official_test_set"] is True
           assert cfg["workers"]["candidate"] == [1, 2, 4, 8]
           assert cfg["model"]["learning_rate"] == 0.001
-          assert cfg["model"]["batch_size"] == 1024
+          assert cfg["model"]["global_batch_size"] == 1024
           assert cfg["model"]["epochs"] == 5
+          assert cfg["execution"]["scaling_design"] == "strong_scaling"
+          assert cfg["execution"]["baseline"].startswith("1-worker TorchDistributor")
           print("experiment_matrix.yaml: PASS")
           PY
