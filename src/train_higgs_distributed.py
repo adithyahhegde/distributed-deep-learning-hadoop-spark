@@ -25,6 +25,7 @@ import platform
 import socket
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -190,6 +191,45 @@ def collect_environment(spark):
     }
 
 
+def benchmark_signature(args, environment):
+    """Return a stable comparability key; exclude per-run host/app identifiers."""
+    stable_environment_keys = (
+        "python",
+        "platform",
+        "cpu_count",
+        "memory_total_bytes",
+        "pytorch",
+        "pyspark",
+        "hadoop_version",
+        "java_version",
+        "numpy",
+        "pandas",
+        "pyarrow",
+        "scikit_learn",
+        "spark_master",
+        "spark_executor_memory",
+        "spark_executor_cores",
+        "spark_executor_instances",
+        "spark_default_parallelism",
+        "torch_cuda_available",
+        "torch_cuda_device_count",
+        "torch_cuda_version",
+    )
+    payload = {
+        "git_sha": args.git_sha,
+        "train_rows": args.train_rows,
+        "validation_rows": args.validation_rows,
+        "test_rows": args.test_rows,
+        "global_batch_size": args.global_batch_size,
+        "epochs": args.epochs,
+        "learning_rate": args.learning_rate,
+        "seed": args.seed,
+        "environment": {key: environment.get(key) for key in stable_environment_keys},
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def evaluate_streaming(spark_df, state_dict, batch_size: int):
     import torch
     from sklearn.metrics import accuracy_score, log_loss, roc_auc_score
@@ -278,13 +318,21 @@ def main():
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--git-sha", required=True)
+    parser.add_argument("--run-id", default=None, help="Unique run identifier; generated in UTC when omitted")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
+    run_started_utc = datetime.now(timezone.utc).isoformat()
+    run_id = args.run_id or f"run-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}"
+
+    if args.workers < 1:
+        raise ValueError("workers must be >= 1")
     if args.train_rows % args.workers != 0:
         raise ValueError("train_rows must be divisible by workers for exact partition sampling")
     if args.global_batch_size % args.workers != 0:
         raise ValueError("global_batch_size must be divisible by workers")
+    if args.validation_rows != 500_000 or args.test_rows != 500_000:
+        raise ValueError("validation_rows and test_rows must remain the fixed 500,000-row evaluation sets")
 
     from pyspark.sql import SparkSession
     from pyspark.ml.torch.distributor import TorchDistributor
@@ -348,10 +396,14 @@ def main():
         model_sha256 = sha256_file(model_path)
 
         environment = collect_environment(spark)
+        signature = benchmark_signature(args, environment)
         output = {
-            "artifact_schema_version": 3,
+            "artifact_schema_version": 4,
             "status": "completed",
             "measurement_type": "actual_run",
+            "run_id": run_id,
+            "run_started_utc": run_started_utc,
+            "benchmark_signature": signature,
             "workers": args.workers,
             "train_rows": args.train_rows,
             "validation_rows": args.validation_rows,
