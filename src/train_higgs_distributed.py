@@ -192,12 +192,15 @@ def collect_environment(spark):
 
 
 def benchmark_signature(args, environment):
-    """Return a stable comparability key; exclude per-run host/app identifiers."""
+    """Return a comparability key for invariant benchmark conditions.
+
+    Worker count and worker-scaling resource counts are intentionally excluded: those are the
+    independent variable in the strong-scaling experiment. Per-executor resource settings remain
+    included because changing cores or memory per executor would change the compute condition.
+    """
     stable_environment_keys = (
         "python",
         "platform",
-        "cpu_count",
-        "memory_total_bytes",
         "pytorch",
         "pyspark",
         "hadoop_version",
@@ -209,10 +212,7 @@ def benchmark_signature(args, environment):
         "spark_master",
         "spark_executor_memory",
         "spark_executor_cores",
-        "spark_executor_instances",
-        "spark_default_parallelism",
         "torch_cuda_available",
-        "torch_cuda_device_count",
         "torch_cuda_version",
     )
     payload = {
@@ -430,14 +430,11 @@ def main():
             "test_roc_auc": test_metrics["roc_auc"],
             "environment": environment,
             "git_sha": args.git_sha,
-            "train_path": args.train_path,
-            "validation_path": args.validation_path,
-            "test_path": args.test_path,
             "model_artifact_path": str(model_path),
             "model_artifact_sha256": model_sha256,
         }
-        output_path.write_text(json.dumps(output, indent=2, default=str), encoding="utf-8")
-        print(json.dumps(output, indent=2, default=str))
+        output_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
+        print(json.dumps(output, indent=2))
     finally:
         spark.stop()
 
