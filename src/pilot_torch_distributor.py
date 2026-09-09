@@ -73,11 +73,14 @@ def main():
     parser.add_argument("--steps", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--git-sha", required=True)
     parser.add_argument("--output", default="pilot_result.json")
     args = parser.parse_args()
 
     if args.num_processes < 1:
         raise ValueError("num-processes must be >= 1")
+    if not args.git_sha.strip() or args.git_sha.strip().lower() in {"unknown", "none"}:
+        raise ValueError("git-sha must identify the exact repository commit used for the pilot")
 
     from pyspark.sql import SparkSession
     from pyspark.ml.torch.distributor import TorchDistributor
@@ -112,6 +115,7 @@ def main():
         evidence = {
             "measurement_type": "environment_pilot",
             "status": "completed",
+            "git_sha": args.git_sha,
             "requested_processes": args.num_processes,
             "observed_rank0": int(result["rank"]),
             "observed_world_size": int(result["world_size"]),
