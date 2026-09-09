@@ -12,9 +12,10 @@ import argparse
 import json
 import os
 import time
+from pathlib import Path
 
 
-def train(steps: int, batch_size: int, seed: int, output_path: str):
+def train(steps: int, batch_size: int, seed: int):
     import torch
     import torch.distributed as dist
 
@@ -61,10 +62,6 @@ def train(steps: int, batch_size: int, seed: int, output_path: str):
         "status": "pilot_ok",
     }
 
-    if rank == 0:
-        with open(output_path, "w", encoding="utf-8") as handle:
-            json.dump(result, handle, indent=2)
-
     if initialized_here:
         dist.destroy_process_group()
     return result
@@ -79,6 +76,9 @@ def main():
     parser.add_argument("--output", default="pilot_result.json")
     args = parser.parse_args()
 
+    if args.num_processes < 1:
+        raise ValueError("num-processes must be >= 1")
+
     from pyspark.sql import SparkSession
     from pyspark.ml.torch.distributor import TorchDistributor
 
@@ -89,13 +89,43 @@ def main():
             local_mode=False,
             use_gpu=False,
         )
-        distributor.run(
+        start = time.perf_counter()
+        result = distributor.run(
             train,
             args.steps,
             args.batch_size,
             args.seed,
-            args.output,
         )
+        elapsed = time.perf_counter() - start
+
+        if not isinstance(result, dict):
+            raise RuntimeError("TorchDistributor pilot did not return a rank-0 result dictionary")
+        if int(result.get("rank", -1)) != 0:
+            raise RuntimeError(f"Expected rank 0 result, observed {result.get('rank')}")
+        if int(result.get("world_size", -1)) != args.num_processes:
+            raise RuntimeError(
+                f"Requested {args.num_processes} processes but observed world_size={result.get('world_size')}"
+            )
+        if result.get("status") != "pilot_ok":
+            raise RuntimeError(f"Pilot returned unexpected status: {result.get('status')}")
+
+        evidence = {
+            "measurement_type": "environment_pilot",
+            "status": "completed",
+            "requested_processes": args.num_processes,
+            "observed_rank0": int(result["rank"]),
+            "observed_world_size": int(result["world_size"]),
+            "device": result["device"],
+            "steps": args.steps,
+            "batch_size": args.batch_size,
+            "seed": args.seed,
+            "pilot_training_seconds_rank0": float(result["elapsed_training_seconds"]),
+            "pilot_job_wall_clock_seconds_driver": elapsed,
+        }
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
+        print(json.dumps(evidence, indent=2))
     finally:
         spark.stop()
 
