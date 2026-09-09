@@ -153,9 +153,9 @@ Chilimbi, T., Suzue, Y., Apacible, J., & Kalyanaraman, K. (2014). Project Adam: 
 
 Cruz, L., Tous, R., & Otero, B. (2019). Distributed training of deep neural networks with Spark: The MareNostrum experience. *Pattern Recognition Letters, 125*, 174–178. https://doi.org/10.1016/j.patrec.2019.01.020
 
-Dai, J., Wang, Y., Qiu, X., et al. (2019). BigDL: A distributed deep learning framework for big data. *Proceedings of the ACM Symposium on Cloud Computing*, 50–60. https://doi.org/10.1145/3357223.3362707
+Dai, Jason Jinquan, Wang, Yiheng, Qiu, Xin, Ding, Ding, Zhang, Yao, Wang, Yanzhang, Jia, Xianyan, Zhang, Cherry, Wan, Yan, Li, Zhichao, Wang, Jiao, Huang, Shengsheng, Wu, Zhongyuan, Wang, Yang, Yang, Yuhao, She, Bowen, Shi, Dongjie, Lu, Qi, Huang, Kai, & Song, Guoqiong. (2019). BigDL: A distributed deep learning framework for big data. *Proceedings of the ACM Symposium on Cloud Computing*, 50–60. https://doi.org/10.1145/3357223.3362707
 
-Dai, J., Ding, D., Shi, D., Huang, S., Wang, J., Qiu, X., Huang, K., Song, G., Wang, Y., Gong, Q., Song, J., Yu, S., Zheng, L., Chen, Y., Deng, J., & Song, G. (2022). BigDL 2.0: Seamless scaling of AI pipelines from laptops to distributed cluster. *Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)*, 21439–21446. https://doi.org/10.1109/CVPR52688.2022.02076
+Dai, Jason (Jinquan), Ding, Ding, Shi, Dongjie, Huang, Shengsheng, Wang, Jiao, Qiu, Xin, Huang, Kai, Song, Guoqiong, Wang, Yang, Gong, Qiyuan, Song, Jiaming, Yu, Shan, Zheng, Le, Chen, Yina, Deng, Junwei, & Song, Ge. (2022). BigDL 2.0: Seamless scaling of AI pipelines from laptops to distributed cluster. *Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)*, 21439–21446. https://doi.org/10.1109/CVPR52688.2022.02076
 
 Dean, J., Corrado, G., Monga, R., Chen, K., Devin, M., Mao, M. Z., Ranzato, M., Senior, A., Tucker, P., Yang, K., Le, Q. V., & Ng, A. Y. (2012). Large scale distributed deep networks. *Advances in Neural Information Processing Systems, 25*.
 
