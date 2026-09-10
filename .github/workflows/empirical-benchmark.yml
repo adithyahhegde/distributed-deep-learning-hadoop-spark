@@ -29,6 +29,16 @@ jobs:
           python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.10.0+cpu'
           grep -v '^torch' requirements.txt > /tmp/requirements-no-torch.txt
           python -m pip install -r /tmp/requirements-no-torch.txt
+          python -m pip install --force-reinstall 'numpy==1.26.4'
+          python - <<'PY'
+          import numpy, pyspark, pyarrow
+          print('numpy', numpy.__version__)
+          print('pyspark', pyspark.__version__)
+          print('pyarrow', pyarrow.__version__)
+          assert numpy.__version__ == '1.26.4'
+          assert pyspark.__version__ == '3.5.9'
+          assert pyarrow.__version__ == '12.0.1'
+          PY
       - name: Install Hadoop 3.4.1
         run: |
           curl -L --fail --retry 8 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 900 \
