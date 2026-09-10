@@ -16,25 +16,21 @@ jobs:
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-
       - name: Install Hadoop 3.4.1
         run: |
-          curl -L --fail --retry 5 --retry-delay 5 \
-            https://archive.apache.org/dist/hadoop/common/hadoop-3.4.1/hadoop-3.4.1.tar.gz \
+          curl -L --fail --retry 8 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 900 \
+            https://dlcdn.apache.org/hadoop/common/hadoop-3.4.1/hadoop-3.4.1.tar.gz \
             -o /tmp/hadoop.tar.gz
           sudo tar -xzf /tmp/hadoop.tar.gz -C /opt
           sudo ln -s /opt/hadoop-3.4.1 /opt/hadoop
@@ -42,7 +38,6 @@ jobs:
           echo 'HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop' >> "$GITHUB_ENV"
           echo '/opt/hadoop/bin' >> "$GITHUB_PATH"
           echo '/opt/hadoop/sbin' >> "$GITHUB_PATH"
-
       - name: Configure and start HDFS
         run: |
           cat > /opt/hadoop/etc/hadoop/core-site.xml <<'EOF'
@@ -70,32 +65,27 @@ jobs:
           /opt/hadoop/bin/hdfs dfsadmin -safemode wait
           /opt/hadoop/bin/hdfs dfs -mkdir -p /higgs/input /higgs/benchmarks
           /opt/hadoop/bin/hdfs dfs -df -h
-
       - name: Download UCI HIGGS source
         run: |
-          curl -L --fail --retry 5 --retry-delay 5 \
+          curl -L --fail --retry 8 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 1800 \
             https://archive.ics.uci.edu/static/public/280/higgs.zip \
             -o /tmp/higgs.zip
           unzip -p /tmp/higgs.zip HIGGS.csv.gz > /tmp/HIGGS.csv.gz
           rm -f /tmp/higgs.zip
           ls -lh /tmp/HIGGS.csv.gz
-
       - name: Ingest HIGGS into HDFS
         run: |
           /opt/hadoop/bin/hdfs dfs -put -f /tmp/HIGGS.csv.gz /higgs/input/HIGGS.csv.gz
           /opt/hadoop/bin/hdfs dfs -ls -h /higgs/input
           /opt/hadoop/bin/hdfs dfs -cat /higgs/input/HIGGS.csv.gz | gzip -t
-
       - name: Prepare deterministic HDFS splits
         env:
           PYSPARK_PYTHON: python3
         run: |
-          spark-submit --master local[2] \
-            --conf spark.driver.memory=3g \
+          spark-submit --master local[2] --conf spark.driver.memory=3g \
             src/prepare_higgs_splits.py \
             --input hdfs:///higgs/input/HIGGS.csv.gz \
             --output-root hdfs:///higgs/prepared
-
       - name: Run controlled distributed benchmark matrix
         env:
           PYSPARK_PYTHON: python3
@@ -104,11 +94,8 @@ jobs:
           set -euo pipefail
           mkdir -p results
           SHA="$(git rev-parse HEAD)"
-
           run_one() {
-            workers="$1"
-            volume="$2"
-            repeat="$3"
+            workers="$1"; volume="$2"; repeat="$3"
             echo "=== RUN workers=${workers} volume=${volume} repeat=${repeat} ==="
             spark-submit \
               --master "local-cluster[${workers},1,1024]" \
@@ -121,45 +108,28 @@ jobs:
               --train-path "hdfs:///higgs/prepared/train_${volume}" \
               --validation-path hdfs:///higgs/prepared/validation_500000 \
               --test-path hdfs:///higgs/prepared/test_500000 \
-              --workers "${workers}" \
-              --train-rows "${volume}" \
-              --validation-rows 500000 \
-              --test-rows 500000 \
-              --global-batch-size 1024 \
-              --epochs 5 \
-              --learning-rate 0.001 \
-              --seed 42 \
-              --git-sha "${SHA}" \
-              --run-id "gha-${SHA:0:12}-${workers}w-${volume}r-${repeat}" \
+              --workers "${workers}" --train-rows "${volume}" \
+              --validation-rows 500000 --test-rows 500000 \
+              --global-batch-size 1024 --epochs 5 --learning-rate 0.001 --seed 42 \
+              --git-sha "${SHA}" --run-id "gha-${SHA:0:12}-${workers}w-${volume}r-${repeat}" \
               --output "results/${workers}w_${volume}r_${repeat}.json"
           }
-
-          # One matched baseline and 2/4-worker strong-scaling conditions for every volume.
           for volume in 1000000 2500000 5000000 10000000; do
-            for workers in 1 2 4; do
-              run_one "$workers" "$volume" 1
-            done
+            for workers in 1 2 4; do run_one "$workers" "$volume" 1; done
           done
-
-          # Repeats at the largest workload provide variability estimates for the main scaling result.
           for repeat in 2 3; do
-            for workers in 1 2 4; do
-              run_one "$workers" 10000000 "$repeat"
-            done
+            for workers in 1 2 4; do run_one "$workers" 10000000 "$repeat"; done
           done
-
       - name: Validate and aggregate retained artifacts
         run: |
           python src/analyze_runs.py --input results --output results/summary.json
           python - <<'PY'
           import json
-          p='results/summary.json'
-          d=json.load(open(p))
+          d=json.load(open('results/summary.json'))
           assert d['artifact_count'] >= 18, d
           assert d['rejected_artifact_count'] == 0, d
           print(json.dumps(d, indent=2))
           PY
-
       - name: Capture environment and service logs
         if: always()
         run: |
@@ -170,7 +140,6 @@ jobs:
           /opt/hadoop/bin/hdfs dfsadmin -report > results/hdfs-report.txt 2>&1 || true
           cp /tmp/namenode.log results/namenode.log 2>/dev/null || true
           cp /tmp/datanode.log results/datanode.log 2>/dev/null || true
-
       - name: Upload benchmark evidence
         if: always()
         uses: actions/upload-artifact@v4
