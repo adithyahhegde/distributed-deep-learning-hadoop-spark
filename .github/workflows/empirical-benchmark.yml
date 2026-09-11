@@ -14,6 +14,16 @@ jobs:
   benchmark:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    env:
+      PYSPARK_PYTHON: python3
+      PYSPARK_DRIVER_PYTHON: python3
+      PYTHONPATH: ${{ github.workspace }}/src
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      VECLIB_MAXIMUM_THREADS: '1'
+      NUMEXPR_NUM_THREADS: '1'
+      TORCH_NUM_THREADS: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,22 +35,42 @@ jobs:
           java-version: '17'
       - name: Install Python dependencies
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.10.0+cpu'
           grep -v '^torch' requirements.txt > /tmp/requirements-no-torch.txt
           python -m pip install -r /tmp/requirements-no-torch.txt
           python -m pip install --force-reinstall 'numpy==1.26.4'
           python - <<'PY'
-          import numpy, pyspark, pyarrow
+          import numpy, pyspark, pyarrow, torch
+          import pyspark.ml.torch.distributor as distributor
           print('numpy', numpy.__version__)
           print('pyspark', pyspark.__version__)
           print('pyarrow', pyarrow.__version__)
+          print('torch', torch.__version__)
+          print('spark private loader present', hasattr(distributor, '_get_spark_partition_data_loader'))
           assert numpy.__version__ == '1.26.4'
           assert pyspark.__version__ == '3.5.9'
           assert pyarrow.__version__ == '12.0.1'
+          assert torch.__version__.startswith('2.10.0')
+          assert hasattr(distributor, '_get_spark_partition_data_loader')
+          PY
+      - name: Verify benchmark source and worker compatibility
+        run: |
+          set -euo pipefail
+          python -m py_compile src/train_higgs_distributed.py src/run_higgs_distributed_compat.py src/analyze_runs.py
+          python - <<'PY'
+          import os
+          import pyspark.ml.torch.distributor as distributor
+          assert os.environ['PYSPARK_PYTHON'] == 'python3'
+          assert hasattr(distributor, '_get_spark_partition_data_loader')
+          print('Spark 3.5.9 private partition loader: PASS')
+          print('Python worker selection:', os.environ['PYSPARK_PYTHON'])
+          print('CPU thread limits:', {k: os.environ.get(k) for k in ('OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS','TORCH_NUM_THREADS')})
           PY
       - name: Install Hadoop 3.4.1
         run: |
+          set -euo pipefail
           curl -L --fail --retry 8 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 900 \
             https://dlcdn.apache.org/hadoop/common/hadoop-3.4.1/hadoop-3.4.1.tar.gz \
             -o /tmp/hadoop.tar.gz
@@ -53,6 +83,7 @@ jobs:
           echo '/opt/hadoop/sbin' >> "$GITHUB_PATH"
       - name: Configure and start HDFS
         run: |
+          set -euo pipefail
           mkdir -p /tmp/hdfs/name /tmp/hdfs/data
           cat > /opt/hadoop/etc/hadoop/core-site.xml <<'EOF'
           <?xml version="1.0"?>
@@ -80,6 +111,7 @@ jobs:
           /opt/hadoop/bin/hdfs dfs -df -h
       - name: Download UCI HIGGS source
         run: |
+          set -euo pipefail
           curl -L --fail --retry 8 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 1800 \
             https://archive.ics.uci.edu/static/public/280/higgs.zip \
             -o /tmp/higgs.zip
@@ -88,25 +120,25 @@ jobs:
           ls -lh /tmp/HIGGS.csv.gz
       - name: Ingest HIGGS into HDFS
         run: |
+          set -euo pipefail
           /opt/hadoop/bin/hdfs dfs -put -f /tmp/HIGGS.csv.gz /higgs/input/HIGGS.csv.gz
           /opt/hadoop/bin/hdfs dfs -ls -h /higgs/input
-          /opt/hadoop/bin/hdfs dfs -cat /higgs/input/HIGGS.csv.gz | gzip -t
+          /opt/hadoop/bin/hdfs -cat /higgs/input/HIGGS.csv.gz | gzip -t
       - name: Prepare deterministic HDFS splits
         env:
           PYSPARK_PYTHON: python3
         run: |
+          set -euo pipefail
           spark-submit --master local[2] --conf spark.driver.memory=3g \
+            --conf spark.pyspark.python=python3 \
+            --conf spark.pyspark.driver.python=python3 \
             src/prepare_higgs_splits.py \
             --input hdfs:///higgs/input/HIGGS.csv.gz \
             --output-root hdfs:///higgs/prepared
       - name: Run controlled distributed benchmark matrix
-        env:
-          PYSPARK_PYTHON: python3
-          PYSPARK_DRIVER_PYTHON: python3
-          PYTHONPATH: ${{ github.workspace }}/src
         run: |
           set -euo pipefail
-          mkdir -p results
+          mkdir -p results /tmp/spark-local
           SHA="$(git rev-parse HEAD)"
           run_one() {
             workers="$1"; volume="$2"; repeat="$3"
@@ -116,10 +148,27 @@ jobs:
               --conf spark.driver.memory=2g \
               --conf spark.executor.memory=1024m \
               --conf spark.executor.cores=1 \
+              --conf spark.executor.instances="${workers}" \
               --conf spark.dynamicAllocation.enabled=false \
+              --conf spark.speculation=false \
+              --conf spark.task.maxFailures=1 \
               --conf spark.ui.enabled=false \
+              --conf spark.network.timeout=120s \
+              --conf spark.executor.heartbeatInterval=20s \
+              --conf spark.driver.host=127.0.0.1 \
+              --conf spark.driver.bindAddress=127.0.0.1 \
+              --conf spark.pyspark.python=python3 \
+              --conf spark.pyspark.driver.python=python3 \
               --conf "spark.executorEnv.PYTHONPATH=${GITHUB_WORKSPACE}/src" \
-              --py-files src/train_higgs_distributed.py \
+              --conf "spark.executorEnv.PYSPARK_PYTHON=python3" \
+              --conf "spark.executorEnv.PYSPARK_DRIVER_PYTHON=python3" \
+              --conf "spark.executorEnv.OMP_NUM_THREADS=1" \
+              --conf "spark.executorEnv.MKL_NUM_THREADS=1" \
+              --conf "spark.executorEnv.OPENBLAS_NUM_THREADS=1" \
+              --conf "spark.executorEnv.NUMEXPR_NUM_THREADS=1" \
+              --conf "spark.executorEnv.TORCH_NUM_THREADS=1" \
+              --conf "spark.local.dir=/tmp/spark-local" \
+              --py-files src/train_higgs_distributed.py,src/run_higgs_distributed_compat.py \
               src/run_higgs_distributed_compat.py \
               --train-path "hdfs:///higgs/prepared/train_${volume}" \
               --validation-path hdfs:///higgs/prepared/validation_500000 \
@@ -138,12 +187,22 @@ jobs:
           done
       - name: Validate and aggregate retained artifacts
         run: |
+          set -euo pipefail
           python src/analyze_runs.py --input results --output results/summary.json
           python - <<'PY'
           import json
-          d=json.load(open('results/summary.json'))
-          assert d['artifact_count'] >= 18, d
+          from pathlib import Path
+          d=json.load(open('results/summary.json', encoding='utf-8'))
+          assert d['artifact_count'] == 18, d
           assert d['rejected_artifact_count'] == 0, d
+          expected = {
+              f'{w}w_{v}r_{r}.json'
+              for v in (1000000, 2500000, 5000000, 10000000)
+              for w in (1, 2, 4)
+              for r in ((1, 2, 3) if v == 10000000 else (1,))
+          }
+          actual = {p.name for p in Path('results').glob('*w_*r_*.json')}
+          assert actual == expected, {'expected': sorted(expected), 'actual': sorted(actual)}
           print(json.dumps(d, indent=2))
           PY
       - name: Capture environment and service logs
@@ -152,6 +211,7 @@ jobs:
           mkdir -p results
           nproc > results/cpu-count.txt || true
           free -h > results/memory.txt || true
+          df -h > results/disk.txt || true
           lscpu > results/lscpu.txt 2>&1 || true
           java -version 2>&1 | tee results/java-version.txt || true
           python --version | tee results/python-version.txt || true
