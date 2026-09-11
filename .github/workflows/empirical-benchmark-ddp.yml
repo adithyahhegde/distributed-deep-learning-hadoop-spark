@@ -38,13 +38,15 @@ jobs:
           curl -fsSL https://archive.apache.org/dist/hadoop/common/hadoop-3.4.2/hadoop-3.4.2.tar.gz -o hadoop.tgz
           tar -xzf hadoop.tgz
           mv hadoop-3.4.2 hadoop
-          echo "HADOOP_HOME=$RUNNER_TEMP/hadoop" >> "$GITHUB_ENV"
-          echo "$RUNNER_TEMP/hadoop/bin" >> "$GITHUB_PATH"
-          echo "$RUNNER_TEMP/hadoop/sbin" >> "$GITHUB_PATH"
-          cat > "$RUNNER_TEMP/hadoop/etc/hadoop/core-site.xml" <<EOF
+          export HADOOP_HOME="$RUNNER_TEMP/hadoop"
+          export PATH="$HADOOP_HOME/bin:$HADOOP_HOME/sbin:$PATH"
+          echo "HADOOP_HOME=$HADOOP_HOME" >> "$GITHUB_ENV"
+          echo "$HADOOP_HOME/bin" >> "$GITHUB_PATH"
+          echo "$HADOOP_HOME/sbin" >> "$GITHUB_PATH"
+          cat > "$HADOOP_HOME/etc/hadoop/core-site.xml" <<EOF
           <configuration><property><name>fs.defaultFS</name><value>hdfs://127.0.0.1:9000</value></property></configuration>
           EOF
-          cat > "$RUNNER_TEMP/hadoop/etc/hadoop/hdfs-site.xml" <<EOF
+          cat > "$HADOOP_HOME/etc/hadoop/hdfs-site.xml" <<EOF
           <configuration>
             <property><name>dfs.replication</name><value>1</value></property>
             <property><name>dfs.namenode.name.dir</name><value>file://$RUNNER_TEMP/hdfs/namenode</value></property>
@@ -52,7 +54,7 @@ jobs:
             <property><name>dfs.namenode.rpc-address</name><value>127.0.0.1:9000</value></property>
           </configuration>
           EOF
-          echo "export JAVA_HOME=$JAVA_HOME_17_X64" >> "$RUNNER_TEMP/hadoop/etc/hadoop/hadoop-env.sh"
+          echo "export JAVA_HOME=$JAVA_HOME_17_X64" >> "$HADOOP_HOME/etc/hadoop/hadoop-env.sh"
           mkdir -p "$RUNNER_TEMP/hdfs/namenode" "$RUNNER_TEMP/hdfs/datanode"
           hdfs namenode -format -force -nonInteractive
           hdfs --daemon start namenode
