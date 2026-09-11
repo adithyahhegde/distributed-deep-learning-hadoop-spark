@@ -54,15 +54,21 @@ def main():
     loss_fn = nn.BCEWithLogitsLoss()
     dist.barrier()
     start = time.perf_counter()
+    final_loss = float("nan")
     for _ in range(args.epochs):
         for xb, yb in loader:
             opt.zero_grad(set_to_none=True)
-            loss = loss_fn(net(xb), yb)
+            logits = net(xb)
+            loss = loss_fn(logits, yb)
             loss.backward()
             opt.step()
+            final_loss = float(loss.detach().item())
     elapsed = time.perf_counter() - start
     t = torch.tensor([elapsed], dtype=torch.float64)
     dist.all_reduce(t, op=dist.ReduceOp.MAX)
+    l = torch.tensor([final_loss], dtype=torch.float64)
+    dist.all_reduce(l, op=dist.ReduceOp.SUM)
+    l /= world
     if rank == 0:
         result = {
             "workers": world,
@@ -73,6 +79,7 @@ def main():
             "seed": args.seed,
             "train_time_max_s": float(t.item()),
             "throughput_rows_s": float(len(df) * world * args.epochs / t.item()),
+            "final_loss": float(l.item()),
             "scope": "Plan B: actual UCI HIGGS subset; local PyTorch DDP; no HDFS/Spark in timed path",
         }
         Path(args.output).write_text(json.dumps(result, indent=2))
