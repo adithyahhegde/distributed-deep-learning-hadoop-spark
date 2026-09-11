@@ -123,7 +123,7 @@ jobs:
           set -euo pipefail
           /opt/hadoop/bin/hdfs dfs -put -f /tmp/HIGGS.csv.gz /higgs/input/HIGGS.csv.gz
           /opt/hadoop/bin/hdfs dfs -ls -h /higgs/input
-          /opt/hadoop/bin/hdfs -cat /higgs/input/HIGGS.csv.gz | gzip -t
+          /opt/hadoop/bin/hdfs dfs -cat /higgs/input/HIGGS.csv.gz | gzip -t
       - name: Prepare deterministic HDFS splits
         env:
           PYSPARK_PYTHON: python3
