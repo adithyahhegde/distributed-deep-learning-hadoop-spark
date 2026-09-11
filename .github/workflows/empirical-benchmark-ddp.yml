@@ -1,0 +1,144 @@
+name: Empirical benchmark - standalone Torch DDP
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/train_higgs_torchrun.py"
+      - "src/prepare_higgs_ddp.py"
+      - ".github/workflows/empirical-benchmark-ddp.yml"
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      VECLIB_MAXIMUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install "pyspark==3.5.9" pandas pyarrow scikit-learn
+          python3 -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install Hadoop
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL https://archive.apache.org/dist/hadoop/common/hadoop-3.4.2/hadoop-3.4.2.tar.gz -o hadoop.tgz
+          tar -xzf hadoop.tgz
+          mv hadoop-3.4.2 hadoop
+          echo "HADOOP_HOME=$RUNNER_TEMP/hadoop" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/hadoop/bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/hadoop/sbin" >> "$GITHUB_PATH"
+          cat > "$RUNNER_TEMP/hadoop/etc/hadoop/core-site.xml" <<EOF
+          <configuration><property><name>fs.defaultFS</name><value>hdfs://127.0.0.1:9000</value></property></configuration>
+          EOF
+          cat > "$RUNNER_TEMP/hadoop/etc/hadoop/hdfs-site.xml" <<EOF
+          <configuration>
+            <property><name>dfs.replication</name><value>1</value></property>
+            <property><name>dfs.namenode.name.dir</name><value>file://$RUNNER_TEMP/hdfs/namenode</value></property>
+            <property><name>dfs.datanode.data.dir</name><value>file://$RUNNER_TEMP/hdfs/datanode</value></property>
+            <property><name>dfs.namenode.rpc-address</name><value>127.0.0.1:9000</value></property>
+          </configuration>
+          EOF
+          echo "export JAVA_HOME=$JAVA_HOME_17_X64" >> "$RUNNER_TEMP/hadoop/etc/hadoop/hadoop-env.sh"
+          mkdir -p "$RUNNER_TEMP/hdfs/namenode" "$RUNNER_TEMP/hdfs/datanode"
+          hdfs namenode -format -force -nonInteractive
+          hdfs --daemon start namenode
+          hdfs --daemon start datanode
+          for i in $(seq 1 30); do hdfs dfs -ls / >/dev/null 2>&1 && break; sleep 2; done
+          hdfs dfs -mkdir -p /benchmark
+      - name: Download and stream HIGGS into HDFS
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -L --fail --retry 3 https://archive.ics.uci.edu/static/public/280/higgs.zip -o higgs.zip
+          unzip -o higgs.zip
+          rm -f higgs.zip
+          gunzip -f HIGGS.csv.gz
+          awk '{print (NR-1) "," $0}' HIGGS.csv | hdfs dfs -put - /benchmark/HIGGS_indexed.csv
+          rm -f HIGGS.csv
+          hdfs dfs -du -h /benchmark/HIGGS_indexed.csv
+      - name: Spark deterministic preparation
+        run: |
+          rm -rf "$RUNNER_TEMP/ddp_data"
+          spark-submit --master local[4] --conf spark.ui.enabled=false --conf spark.driver.memory=3g --conf spark.sql.shuffle.partitions=16 src/prepare_higgs_ddp.py hdfs:///benchmark/HIGGS_indexed.csv "file://$RUNNER_TEMP/ddp_data"
+          hdfs dfs -rm -f /benchmark/HIGGS_indexed.csv
+          test -f "$RUNNER_TEMP/ddp_data/validation.parquet/_SUCCESS"
+          test -f "$RUNNER_TEMP/ddp_data/test.parquet/_SUCCESS"
+      - name: Verify deterministic shard counts
+        run: |
+          RUNNER_TEMP="$RUNNER_TEMP" python3 - <<'PY'
+          import os, pandas as pd
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "ddp_data"
+          total = 0
+          for bucket in range(4):
+              d = pd.read_parquet(root / "train" / f"bucket4={bucket}", columns=["source_row_id"])
+              assert len(d) == 2_500_000, (bucket, len(d))
+              assert d["source_row_id"].min() == bucket
+              total += len(d)
+          assert total == 10_000_000
+          assert len(pd.read_parquet(root / "validation.parquet")) == 500_000
+          assert len(pd.read_parquet(root / "test.parquet")) == 500_000
+          print("Deterministic counts verified.")
+          PY
+      - name: Run six controlled DDP benchmark runs
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/ddp_data"
+          OUT="$RUNNER_TEMP/results"
+          mkdir -p "$OUT"
+          for volume in 1000000 2500000; do
+            for workers in 1 2 4; do
+              name="${volume}_${workers}"
+              start=$(python3 -c 'import time; print(time.perf_counter())')
+              torchrun --standalone --nnodes=1 --nproc-per-node="$workers" src/train_higgs_torchrun.py --data-root "$ROOT" --volume "$volume" --workers "$workers" --epochs 5 --batch-size 1024 --lr 0.001 --seed 42 --output "$OUT/$name.json"
+              end=$(python3 -c 'import time; print(time.perf_counter())')
+              python3 - "$OUT/$name.json" "$OUT/$name.total.txt" "$start" "$end" <<'PY'
+          import json, pathlib, sys
+          p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); total=float(sys.argv[3])
+          total=float(sys.argv[4])-total
+          d["total_job_wall_s"]=total; d["throughput_rows_s"]=d["volume"]/total
+          p.write_text(json.dumps(d,indent=2)); pathlib.Path(sys.argv[2]).write_text(str(total))
+          PY
+            done
+          done
+      - name: Aggregate speedup and efficiency
+        run: |
+          RUNNER_TEMP="$RUNNER_TEMP" python3 - <<'PY'
+          import os,json,pathlib,pandas as pd
+          out=pathlib.Path(os.environ["RUNNER_TEMP"])/"results"
+          df=pd.DataFrame(json.loads(p.read_text()) for p in sorted(out.glob("*.json")))
+          baselines=df[df.workers==1].set_index("volume")["total_job_wall_s"].to_dict()
+          df["speedup"]=df.apply(lambda r:baselines[int(r.volume)]/r.total_job_wall_s,axis=1)
+          df["efficiency"]=df["speedup"]/df["workers"]
+          df["throughput_rows_s"]=df["volume"]/df["total_job_wall_s"]
+          df=df.sort_values(["volume","workers"])
+          df.to_csv(out/"summary.csv",index=False)
+          print(df[["volume","workers","total_job_wall_s","train_time_max_s","throughput_rows_s","speedup","efficiency","validation_auc","test_auc","test_accuracy"]].to_string(index=False))
+          assert len(df)==6 and set(df.workers)=={1,2,4} and set(df.volume)=={1_000_000,2_500_000}
+          PY
+      - name: Capture environment
+        run: |
+          python3 - <<'PY' > "$RUNNER_TEMP/results/environment.txt"
+          import platform,sys,torch,pyspark,pandas,pyarrow,sklearn
+          print("python",sys.version); print("torch",torch.__version__); print("pyspark",pyspark.__version__); print("pandas",pandas.__version__); print("pyarrow",pyarrow.__version__); print("scikit-learn",sklearn.__version__); print("platform",platform.platform())
+          PY
+      - name: Upload benchmark evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: empirical-benchmark-ddp-evidence
+          path: ${{ runner.temp }}/results/
+          if-no-files-found: error
+          retention-days: 14
