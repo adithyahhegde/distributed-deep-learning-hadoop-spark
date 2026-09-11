@@ -1,0 +1,93 @@
+name: Plan B - actual HIGGS subset DDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  plan-b:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pandas pyarrow scikit-learn
+          python3 -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Download and prepare 1M actual HIGGS rows
+        run: |
+          mkdir -p "$RUNNER_TEMP/plan_b"
+          curl -L --fail --retry 3 https://mlphysics.ics.uci.edu/data/higgs/HIGGS.csv.gz -o "$RUNNER_TEMP/plan_b/HIGGS.csv.gz"
+          python3 - <<'PY'
+          import os, pandas as pd
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])/'plan_b'
+          cols=['label']+[f'f{i}' for i in range(28)]
+          df=pd.read_csv(root/'HIGGS.csv.gz', header=None, names=cols, nrows=1_000_000, compression='gzip')
+          df['source_row_id']=range(len(df))
+          for b in range(4):
+              part=df[df.source_row_id % 4 == b].copy()
+              part.to_parquet(root/f'bucket_{b}.parquet', index=False)
+          print('Prepared rows:',len(df),'buckets:',[len(df[df.source_row_id%4==b]) for b in range(4)])
+          PY
+          rm -f "$RUNNER_TEMP/plan_b/HIGGS.csv.gz"
+      - name: Run 1M HIGGS DDP scaling at 1, 2 and 4 workers
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/plan_b"
+          OUT="$ROOT/results"
+          mkdir -p "$OUT"
+          for workers in 1 2 4; do
+            python3 - "$ROOT" "$workers" <<'PY'
+          import pathlib,sys,pandas as pd
+          root=pathlib.Path(sys.argv[1]); w=int(sys.argv[2])
+          frames=[pd.read_parquet(root/f'bucket_{b}.parquet') for b in range(4) if b % w == 0 or True]
+          # Recombine and repartition deterministically for this worker count.
+          df=pd.concat(frames,ignore_index=True).sort_values('source_row_id')
+          for r in range(w):
+              df[df.source_row_id % w == r].to_parquet(root/f'worker_{r}.parquet',index=False)
+          PY
+            start=$(python3 -c 'import time; print(time.perf_counter())')
+            mkdir -p "$ROOT/run_$workers"
+            for rank in $(seq 0 $((workers-1))); do cp "$ROOT/worker_$rank.parquet" "$ROOT/run_$workers/worker_$rank.parquet"; done
+            # The trainer consumes one merged parquet; rank filtering is deterministic inside the script.
+            python3 - "$ROOT/run_$workers/merged.parquet" "$ROOT" <<'PY'
+          import pandas as pd,sys
+          from pathlib import Path
+          out=Path(sys.argv[1]); root=Path(sys.argv[2])
+          pd.concat([pd.read_parquet(p) for p in sorted(root.glob('worker_*.parquet'))],ignore_index=True).to_parquet(out,index=False)
+          PY
+            torchrun --standalone --nnodes=1 --nproc-per-node="$workers" src/plan_b_higgs_subset.py --data "$ROOT/run_$workers/merged.parquet" --workers "$workers" --epochs 1 --batch-size 1024 --lr 0.001 --seed 42 --output "$OUT/$workers.json"
+            end=$(python3 -c 'import time; print(time.perf_counter())')
+            python3 - "$OUT/$workers.json" "$start" "$end" <<'PY'
+          import json,pathlib,sys
+          p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); total=float(sys.argv[3])-float(sys.argv[2])
+          d['total_job_wall_s']=total; d['job_throughput_rows_s']=1_000_000/total; p.write_text(json.dumps(d,indent=2))
+          PY
+          done
+      - name: Aggregate Plan B evidence
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, pandas as pd, os
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'plan_b'/'results'
+          df=pd.DataFrame(json.loads(p.read_text()) for p in sorted(out.glob('*.json')))
+          base=float(df.loc[df.workers==1,'total_job_wall_s'].iloc[0])
+          df['speedup']=base/df.total_job_wall_s
+          df['efficiency']=df.speedup/df.workers
+          df.to_csv(out/'plan_b_summary.csv',index=False)
+          print(df[['workers','total_job_wall_s','job_throughput_rows_s','speedup','efficiency']].to_string(index=False))
+          assert set(df.workers)=={1,2,4}
+          PY
+      - name: Upload Plan B evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-b-higgs-subset-evidence
+          path: ${{ runner.temp }}/plan_b/results/
+          if-no-files-found: error
+          retention-days: 14
