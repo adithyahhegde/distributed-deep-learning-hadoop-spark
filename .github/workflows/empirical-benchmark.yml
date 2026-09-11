@@ -117,7 +117,7 @@ jobs:
               --conf spark.executor.cores=1 \
               --conf spark.dynamicAllocation.enabled=false \
               --conf spark.ui.enabled=false \
-              src/train_higgs_distributed.py \
+              src/run_higgs_distributed_compat.py \
               --train-path "hdfs:///higgs/prepared/train_${volume}" \
               --validation-path hdfs:///higgs/prepared/validation_500000 \
               --test-path hdfs:///higgs/prepared/test_500000 \
