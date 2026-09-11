@@ -37,6 +37,7 @@ jobs:
           df['source_row_id']=range(len(df))
           for b in range(4):
               df[df.source_row_id % 4 == b].to_parquet(root/f'bucket_{b}.parquet', index=False)
+          df.to_parquet(root/'all_1m.parquet', index=False)
           print('Prepared rows:',len(df),'buckets:',[len(df[df.source_row_id%4==b]) for b in range(4)])
           PY
           rm -f "$RUNNER_TEMP/plan_b/HIGGS.csv.gz"
@@ -47,15 +48,8 @@ jobs:
           OUT="$ROOT/results"
           mkdir -p "$OUT"
           for workers in 1 2 4; do
-            python3 - "$ROOT" "$workers" <<'PY'
-          import pathlib,sys,pandas as pd
-          root=pathlib.Path(sys.argv[1]); w=int(sys.argv[2])
-          df=pd.concat([pd.read_parquet(root/f'bucket_{b}.parquet') for b in range(4)],ignore_index=True).sort_values('source_row_id')
-          for r in range(w):
-              df[df.source_row_id % w == r].to_parquet(root/f'worker_{r}.parquet',index=False)
-          PY
             start=$(python3 -c 'import time; print(time.perf_counter())')
-            torchrun --standalone --nnodes=1 --nproc-per-node="$workers" src/plan_b_higgs_subset.py --data "$ROOT/bucket_0.parquet" --workers "$workers" --epochs 1 --batch-size 1024 --lr 0.001 --seed 42 --output "$OUT/$workers.json"
+            torchrun --standalone --nnodes=1 --nproc-per-node="$workers" src/plan_b_higgs_subset.py --data "$ROOT/all_1m.parquet" --workers "$workers" --epochs 1 --batch-size 1024 --lr 0.001 --seed 42 --output "$OUT/$workers.json"
             end=$(python3 -c 'import time; print(time.perf_counter())')
             python3 - "$OUT/$workers.json" "$start" "$end" <<'PY'
           import json,pathlib,sys
