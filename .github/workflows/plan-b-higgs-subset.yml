@@ -41,34 +41,49 @@ jobs:
           print('Prepared rows:',len(df),'buckets:',[len(df[df.source_row_id%4==b]) for b in range(4)])
           PY
           rm -f "$RUNNER_TEMP/plan_b/HIGGS.csv.gz"
-      - name: Run 1M HIGGS DDP scaling at 1, 2 and 4 workers
+      - name: Run 1M HIGGS DDP scaling at 1, 2 and 4 workers with repeats
         run: |
           set -euo pipefail
           ROOT="$RUNNER_TEMP/plan_b"
           OUT="$ROOT/results"
           mkdir -p "$OUT"
-          for workers in 1 2 4; do
-            start=$(python3 -c 'import time; print(time.perf_counter())')
-            torchrun --standalone --nnodes=1 --nproc-per-node="$workers" src/plan_b_higgs_subset.py --data "$ROOT/all_1m.parquet" --workers "$workers" --epochs 1 --batch-size 1024 --lr 0.001 --seed 42 --output "$OUT/$workers.json"
-            end=$(python3 -c 'import time; print(time.perf_counter())')
-            python3 - "$OUT/$workers.json" "$start" "$end" <<'PY'
+          for repeat in 1 2 3; do
+            for workers in 1 2 4; do
+              start=$(python3 -c 'import time; print(time.perf_counter())')
+              torchrun --standalone --nnodes=1 --nproc-per-node="$workers" src/plan_b_higgs_subset.py --data "$ROOT/all_1m.parquet" --workers "$workers" --epochs 1 --batch-size 1024 --lr 0.001 --seed 42 --output "$OUT/${workers}_r${repeat}.json"
+              end=$(python3 -c 'import time; print(time.perf_counter())')
+              python3 - "$OUT/${workers}_r${repeat}.json" "$start" "$end" <<'PY'
           import json,pathlib,sys
           p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); total=float(sys.argv[3])-float(sys.argv[2])
-          d['total_job_wall_s']=total; d['job_throughput_rows_s']=1_000_000/total; p.write_text(json.dumps(d,indent=2))
+          d['repeat']=int(p.stem.split('_r')[-1]); d['total_job_wall_s']=total; d['job_throughput_rows_s']=1_000_000/total; p.write_text(json.dumps(d,indent=2))
           PY
+            done
           done
       - name: Aggregate Plan B evidence
         run: |
           python3 - <<'PY'
           import json, pathlib, pandas as pd, os
           out=pathlib.Path(os.environ['RUNNER_TEMP'])/'plan_b'/'results'
-          df=pd.DataFrame(json.loads(p.read_text()) for p in sorted(out.glob('*.json')))
-          base=float(df.loc[df.workers==1,'total_job_wall_s'].iloc[0])
-          df['speedup']=base/df.total_job_wall_s
-          df['efficiency']=df.speedup/df.workers
-          df.to_csv(out/'plan_b_summary.csv',index=False)
-          print(df[['workers','total_job_wall_s','job_throughput_rows_s','speedup','efficiency']].to_string(index=False))
-          assert set(df.workers)=={1,2,4}
+          raw=pd.DataFrame(json.loads(p.read_text()) for p in sorted(out.glob('*_r*.json')))
+          summary=(raw.groupby('workers').agg(
+              repeats=('repeat','count'),
+              wall_time_mean_s=('total_job_wall_s','mean'), wall_time_std_s=('total_job_wall_s','std'),
+              train_time_mean_s=('train_time_max_s','mean'), train_time_std_s=('train_time_max_s','std'),
+              throughput_mean_rows_s=('job_throughput_rows_s','mean'), throughput_std_rows_s=('job_throughput_rows_s','std'),
+              train_throughput_mean_rows_s=('throughput_rows_s','mean'), train_throughput_std_rows_s=('throughput_rows_s','std'),
+              final_loss_mean=('final_loss','mean'), final_loss_std=('final_loss','std')
+          ).reset_index())
+          base=float(summary.loc[summary.workers==1,'wall_time_mean_s'].iloc[0])
+          train_base=float(summary.loc[summary.workers==1,'train_time_mean_s'].iloc[0])
+          summary['speedup']=base/summary.wall_time_mean_s
+          summary['efficiency']=summary.speedup/summary.workers
+          summary['train_speedup']=train_base/summary.train_time_mean_s
+          summary['train_efficiency']=summary.train_speedup/summary.workers
+          summary.to_csv(out/'plan_b_summary.csv',index=False)
+          raw.to_csv(out/'plan_b_raw_runs.csv',index=False)
+          print(summary.to_string(index=False))
+          assert set(summary.workers)=={1,2,4}
+          assert (summary.repeats==3).all()
           PY
       - name: Upload Plan B evidence
         uses: actions/upload-artifact@v4
