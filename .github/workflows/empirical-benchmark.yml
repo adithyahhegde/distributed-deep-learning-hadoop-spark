@@ -103,6 +103,7 @@ jobs:
         env:
           PYSPARK_PYTHON: python3
           PYSPARK_DRIVER_PYTHON: python3
+          PYTHONPATH: ${{ github.workspace }}/src
         run: |
           set -euo pipefail
           mkdir -p results
@@ -117,6 +118,7 @@ jobs:
               --conf spark.executor.cores=1 \
               --conf spark.dynamicAllocation.enabled=false \
               --conf spark.ui.enabled=false \
+              --conf "spark.executorEnv.PYTHONPATH=${GITHUB_WORKSPACE}/src" \
               --py-files src/train_higgs_distributed.py \
               src/run_higgs_distributed_compat.py \
               --train-path "hdfs:///higgs/prepared/train_${volume}" \
